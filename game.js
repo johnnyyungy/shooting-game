@@ -22,10 +22,11 @@ const powerupToastEl = document.getElementById('powerupToast');
 const shieldBarWrapEl = document.getElementById('shieldBarWrap');
 const shieldBarFillEl = document.getElementById('shieldBarFill');
 const bossBarWrapEl = document.getElementById('bossBarWrap');
+const bossBarLabelEl = document.getElementById('bossBarLabel');
 const bossBarFillEl = document.getElementById('bossBarFill');
 let toastTimeoutHandle = null;
 
-const HIGH_SCORE_KEY = 'outrunner_highscore';
+const HIGH_SCORE_KEY = 'neonskies_highscore';
 
 function rand(a, b) { return a + Math.random() * (b - a); }
 function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
@@ -101,6 +102,7 @@ const Audio_ = {
       setTimeout(() => this.tone(f, 0.14, 'square', 0.07), i * 70);
     });
   },
+  powerupReroll() { this.tone(950, 0.06, 'triangle', 0.05, 650); },
   shieldBlock() { this.tone(320, 0.1, 'triangle', 0.08, 500); },
   lifeLost() {
     if (!this.ctx) return;
@@ -285,62 +287,30 @@ const Input = {
 
 const DAY_PHASES = ['night', 'dawn', 'morning', 'dusk'];
 
-const CLOUD_SHAPES = [
-  // classic cumulus: wide flat base + clustered round puffs on top
-  [
-    { dx: 0, dy: 0.25, rx: 0.75, ry: 0.22 },
-    { dx: -0.35, dy: -0.05, rx: 0.4, ry: 0.32 },
-    { dx: 0, dy: -0.22, rx: 0.42, ry: 0.38 },
-    { dx: 0.38, dy: -0.02, rx: 0.38, ry: 0.3 },
-  ],
-  // small round puff
-  [
-    { dx: 0, dy: 0.2, rx: 0.55, ry: 0.2 },
-    { dx: -0.22, dy: -0.1, rx: 0.35, ry: 0.32 },
-    { dx: 0.05, dy: -0.25, rx: 0.36, ry: 0.34 },
-    { dx: 0.3, dy: -0.05, rx: 0.3, ry: 0.26 },
-  ],
-  // wide puffy cluster
-  [
-    { dx: 0, dy: 0.22, rx: 0.85, ry: 0.2 },
-    { dx: -0.5, dy: -0.02, rx: 0.32, ry: 0.26 },
-    { dx: -0.12, dy: -0.2, rx: 0.4, ry: 0.34 },
-    { dx: 0.28, dy: -0.06, rx: 0.36, ry: 0.3 },
-    { dx: 0.6, dy: 0.05, rx: 0.28, ry: 0.22 },
-  ],
-  // lopsided with a tall peak
-  [
-    { dx: 0.05, dy: 0.22, rx: 0.6, ry: 0.18 },
-    { dx: -0.25, dy: -0.05, rx: 0.32, ry: 0.28 },
-    { dx: 0.05, dy: -0.3, rx: 0.38, ry: 0.4 },
-    { dx: 0.32, dy: -0.05, rx: 0.3, ry: 0.26 },
-  ],
-];
-
 const DAY_PALETTES = {
   night: {
     skyTop: '#0a0322', skyMid: '#1c0f45', skyBottom: '#3a1360',
     sunTop: '#fff07a', sunMid: '#ff9d2e', sunBottom: '#ff2ee0',
     groundTop: '#2a0f4d', groundBottom: '#0a0316',
-    starAlpha: 1, cloudAlpha: 0,
+    starAlpha: 1,
   },
   dawn: {
     skyTop: '#140a1f', skyMid: '#5a3a1a', skyBottom: '#e8a23a',
     sunTop: '#fff6c8', sunMid: '#ffcc33', sunBottom: '#ff8f2e',
     groundTop: '#3a2410', groundBottom: '#150a08',
-    starAlpha: 0.5, cloudAlpha: 0.15,
+    starAlpha: 0.5,
   },
   morning: {
-    skyTop: '#073259', skyMid: '#136ab0', skyBottom: '#3f9fd6',
+    skyTop: '#02150d', skyMid: '#0f4a30', skyBottom: '#1c8a5c',
     sunTop: '#fff4d6', sunMid: '#ffd24a', sunBottom: '#ff9d4a',
-    groundTop: '#173252', groundBottom: '#050e18',
-    starAlpha: 0.05, cloudAlpha: 0.7,
+    groundTop: '#0d3a26', groundBottom: '#020f08',
+    starAlpha: 0.45,
   },
   dusk: {
     skyTop: '#1a0a2e', skyMid: '#7a1f5a', skyBottom: '#ff6fa8',
     sunTop: '#ffd6e8', sunMid: '#ff5fa0', sunBottom: '#ff2ee0',
     groundTop: '#3a1030', groundBottom: '#0a0316',
-    starAlpha: 0.4, cloudAlpha: 0.25,
+    starAlpha: 0.4,
   },
 };
 
@@ -348,7 +318,6 @@ const Background = {
   horizonY: H * 0.62,
   scroll: 0,
   stars: [],
-  clouds: [],
   phaseIndex: 0,
   prevPhaseIndex: 0,
   transitionT: 999,
@@ -377,7 +346,6 @@ const Background = {
       groundTop: lerpColor(from.groundTop, to.groundTop, t),
       groundBottom: lerpColor(from.groundBottom, to.groundBottom, t),
       starAlpha: from.starAlpha + (to.starAlpha - from.starAlpha) * t,
-      cloudAlpha: from.cloudAlpha + (to.cloudAlpha - from.cloudAlpha) * t,
     };
   },
   init() {
@@ -395,22 +363,6 @@ const Background = {
         });
       }
     });
-
-    this.clouds = [];
-    const cloudLayers = [
-      { n: 5, speed: 10, size: 40, alpha: 0.35 },
-      { n: 4, speed: 18, size: 60, alpha: 0.5 },
-      { n: 3, speed: 28, size: 85, alpha: 0.65 },
-    ];
-    cloudLayers.forEach((layer) => {
-      for (let i = 0; i < layer.n; i++) {
-        this.clouds.push({
-          x: rand(0, W), y: rand(20, this.horizonY * 0.65),
-          speed: layer.speed, size: layer.size * rand(0.8, 1.2), alpha: layer.alpha,
-          variant: (Math.random() * CLOUD_SHAPES.length) | 0
-        });
-      }
-    });
   },
   update(dt) {
     this.scroll += dt;
@@ -419,33 +371,6 @@ const Background = {
       s.x -= s.speed * dt;
       if (s.x < 0) { s.x = W; s.y = rand(0, this.horizonY); }
     });
-    this.clouds.forEach((c) => {
-      c.x -= c.speed * dt;
-      if (c.x < -c.size * 1.5) {
-        c.x = W + c.size;
-        c.y = rand(20, this.horizonY * 0.65);
-        c.variant = (Math.random() * CLOUD_SHAPES.length) | 0;
-      }
-    });
-  },
-  drawCloud(c, mul) {
-    const a = c.alpha * mul;
-    if (a <= 0.01) return;
-    const lobes = CLOUD_SHAPES[c.variant || 0];
-    ctx.save();
-    ctx.globalAlpha = a;
-    ctx.fillStyle = '#eaf6ff';
-    ctx.shadowColor = '#eaf6ff';
-    ctx.shadowBlur = c.size * 0.2;
-    ctx.beginPath();
-    lobes.forEach((l) => {
-      const lx = c.x + l.dx * c.size, ly = c.y + l.dy * c.size;
-      const rx = l.rx * c.size, ry = l.ry * c.size;
-      ctx.moveTo(lx + rx, ly);
-      ctx.ellipse(lx, ly, rx, ry, 0, 0, Math.PI * 2);
-    });
-    ctx.fill();
-    ctx.restore();
   },
   draw() {
     const pal = this.palette;
@@ -465,9 +390,6 @@ const Background = {
       ctx.fillRect(s.x, s.y, s.size, s.size);
     });
     ctx.globalAlpha = 1;
-
-    // clouds
-    this.clouds.forEach((c) => this.drawCloud(c, pal.cloudAlpha));
 
     // sun
     const sunX = W * 0.72, sunY = this.horizonY - 30, sunR = 76;
@@ -666,7 +588,12 @@ class Player {
 
     if (this.wingmen > 0 && Input.firePressed && this.wingmanFireCooldown <= 0) {
       this.wingmanFireCooldown = 0.22;
-      this.getWingmanSlots().forEach((s) => Bullets.spawnPlayer(s.x, s.y, s.angle, '#ffe27a', '#ffcf40'));
+      this.getWingmanSlots().forEach((s) => {
+        // PlayerBullet's angled render path adds (w/2, h/2) = (6, 1.5) as a world-space
+        // offset before rotating, so pre-subtract it here to land exactly on the muzzle tip.
+        const mx = s.x + Math.cos(s.angle) * 11 - 6, my = s.y + Math.sin(s.angle) * 11 - 1.5;
+        Bullets.spawnPlayer(mx, my, s.angle, '#ffe27a', '#ffcf40');
+      });
       Audio_.shoot();
     }
 
@@ -789,18 +716,14 @@ class Player {
     }
     const wx = this.x + this.w * 0.55;
     if (this.wingmanMode === 'outward') {
-      const topCount = Math.ceil(this.wingmen / 2), botCount = this.wingmen - topCount;
-      const slots = [];
-      const addRow = (count, y, angle) => {
-        if (count === 1) slots.push({ x: wx, y, angle });
-        else if (count === 2) {
-          slots.push({ x: wx - 9, y, angle });
-          slots.push({ x: wx + 9, y, angle });
-        }
-      };
-      addRow(topCount, this.y - 6, -Math.PI / 2);
-      addRow(botCount, this.y + this.h + 2, Math.PI / 2);
-      return slots;
+      const topY = this.y - 6, botY = this.y + this.h + 2;
+      const outwardDefs = [
+        { x: wx, y: topY, angle: -Math.PI / 2 },
+        { x: wx, y: botY, angle: Math.PI / 2 },
+        { x: wx - 12, y: topY, angle: -Math.PI / 2 },
+        { x: wx - 12, y: botY, angle: Math.PI / 2 },
+      ];
+      return outwardDefs.slice(0, this.wingmen);
     }
     const defs = [
       { y: this.y - 6 },
@@ -1026,6 +949,7 @@ const Enemies = {
 /* ============================== MINI BOSS ============================== */
 
 const BOSS_COLOR = '#ff3355';
+const BOSS_TIER_SUFFIXES = ['ALPHA', 'BETA', 'GAMMA', 'DELTA', 'EPSILON', 'ZETA', 'ETA', 'THETA', 'IOTA', 'KAPPA'];
 
 class MiniBoss {
   constructor(waveMilestone) {
@@ -1039,6 +963,7 @@ class MiniBoss {
     this.t = rand(0, Math.PI * 2);
     const tier = Math.max(1, Math.round(waveMilestone / 15));
     this.tier = tier;
+    this.name = `SENTINEL-${BOSS_TIER_SUFFIXES[tier - 1] || tier}`;
     this.maxHp = 18 + tier * 10;
     this.hp = this.maxHp;
     this.fireTimer = rand(0.6, 1.0);
@@ -1048,7 +973,7 @@ class MiniBoss {
     this.t += dt;
     if (this.entering) {
       this.x -= this.enterSpeed * dt;
-      if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; }
+      if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; this.t = 0; }
     } else {
       this.x = this.targetX + Math.sin(this.t * 0.5) * 50;
       this.y = clamp(this.baseY + Math.sin(this.t * 1.3) * 70, Background.horizonY * 0.05, Background.horizonY - this.h - 10);
@@ -1145,17 +1070,30 @@ class PowerUp {
     this.y = this.baseY;
     this.speed = 130;
     this.t = rand(0, Math.PI * 2);
+    this.rerollCooldown = 0;
+    this.flickerT = 0;
   }
   update(dt) {
     this.t += dt;
     this.x -= this.speed * dt;
     this.y = this.baseY + Math.sin(this.t * 2) * 14;
+    if (this.rerollCooldown > 0) this.rerollCooldown -= dt;
+    if (this.flickerT > 0) this.flickerT -= dt;
+  }
+  reroll() {
+    const choices = Object.entries(POWERUP_TYPES).filter(([key]) => key !== this.type);
+    this.type = pickWeighted(choices);
+    this.spec = POWERUP_TYPES[this.type];
+    this.rerollCooldown = 0.25;
+    this.flickerT = 0.25;
   }
   get box() { return { x: this.x + 3, y: this.y + 3, w: this.w - 6, h: this.h - 6 }; }
   draw() {
     ctx.save();
     ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
     const pulse = 0.7 + 0.3 * Math.sin(this.t * 5);
+    const flick = this.flickerT > 0 ? clamp(this.flickerT / 0.25, 0, 1) : 0;
+    const dispColor = flick > 0 ? rgbaStr(lerpColor('#ffffff', this.spec.color, 1 - flick)) : this.spec.color;
     ctx.rotate(this.t * 1.4);
     ctx.beginPath();
     const r = this.w / 2;
@@ -1166,14 +1104,14 @@ class PowerUp {
     }
     ctx.closePath();
     ctx.fillStyle = 'rgba(10, 5, 20, 0.55)';
-    ctx.strokeStyle = this.spec.color;
-    ctx.shadowColor = this.spec.color;
-    ctx.shadowBlur = 10 + 8 * pulse;
+    ctx.strokeStyle = dispColor;
+    ctx.shadowColor = dispColor;
+    ctx.shadowBlur = 10 + 8 * pulse + 10 * flick;
     ctx.lineWidth = 2;
     ctx.fill();
     ctx.stroke();
     ctx.rotate(-this.t * 1.4);
-    ctx.fillStyle = this.spec.color;
+    ctx.fillStyle = dispColor;
     ctx.font = 'bold 15px Orbitron, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1381,20 +1319,22 @@ const Game = {
 
   spawnBoss(milestone) {
     this.boss = new MiniBoss(milestone);
-    this.showToast('MINI BOSS INCOMING', BOSS_COLOR);
+    bossBarLabelEl.textContent = this.boss.name;
+    this.showToast(`${this.boss.name} INCOMING`, BOSS_COLOR);
     Audio_.bossWarning();
     this.updateBossBar();
   },
 
   defeatBoss() {
     const tier = this.boss.tier;
+    const name = this.boss.name;
     Audio_.explosion();
     this.shake(0.5, 14);
     Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, BOSS_COLOR, 40, 260);
     this.boss = null;
     this.updateBossBar();
     this.addScore(1500 + tier * 500);
-    this.showToast('MINI BOSS DESTROYED', BOSS_COLOR);
+    this.showToast(`${name} DESTROYED`, BOSS_COLOR);
   },
 
   gameOver() {
@@ -1444,6 +1384,18 @@ const Game = {
           const bossDead = this.boss.takeHit();
           this.updateBossBar();
           if (bossDead) this.defeatBoss();
+        }
+      }
+      if (!b._dead) {
+        for (const p of PowerUps.list) {
+          if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, p.box)) {
+            b._dead = true;
+            if (p.rerollCooldown <= 0) {
+              p.reroll();
+              Audio_.powerupReroll();
+            }
+            break;
+          }
         }
       }
     }
