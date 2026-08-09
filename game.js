@@ -33,6 +33,17 @@ function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function rectsOverlap(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
+function hexToRgb(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function lerpColor(hexA, hexB, t) {
+  const a = hexToRgb(hexA), b = hexToRgb(hexB);
+  return [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t));
+}
+function rgbaStr(rgb, a) {
+  return a === undefined ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
+}
 
 /* ============================== AUDIO ============================== */
 
@@ -131,6 +142,7 @@ const MUSIC_TRACKS = [
   encodeURI('Drum Or Bass - Ryan Stasik.mp3'),
   encodeURI('Horizons - Alex Jones _ Xander Jones.mp3'),
   encodeURI('Midnight - Dan Henig.mp3'),
+  encodeURI('Rinse Repeat - DivKid.mp3'),
 ];
 
 const Music = {
@@ -163,6 +175,22 @@ const Music = {
   },
   pause() { this.players.forEach((p) => p.pause()); },
   resume() { this.players[this.current].play().catch(() => {}); },
+  fadeOut(duration = 1.5) {
+    this.fading = true;
+    const startVols = this.players.map((p) => p.volume);
+    const startT = performance.now();
+    const durationMs = duration * 1000;
+    const step = () => {
+      const t = clamp((performance.now() - startT) / durationMs, 0, 1);
+      this.players.forEach((p, i) => { p.volume = startVols[i] * (1 - t); });
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        this.players.forEach((p) => p.pause());
+      }
+    };
+    requestAnimationFrame(step);
+  },
   checkForCrossfade(player) {
     if (this.fading || this.players[this.current] !== player) return;
     if (player.duration && !isNaN(player.duration) && player.duration - player.currentTime <= this.fadeSeconds) {
@@ -175,6 +203,7 @@ const Music = {
   },
   crossfade() {
     this.fading = true;
+    Background.beginTransition();
     const outgoing = this.players[this.current];
     const next = 1 - this.current;
     const incoming = this.players[next];
@@ -254,10 +283,103 @@ const Input = {
 
 /* ============================== BACKGROUND ============================== */
 
+const DAY_PHASES = ['night', 'dawn', 'morning', 'dusk'];
+
+const CLOUD_SHAPES = [
+  // classic cumulus: wide flat base + clustered round puffs on top
+  [
+    { dx: 0, dy: 0.25, rx: 0.75, ry: 0.22 },
+    { dx: -0.35, dy: -0.05, rx: 0.4, ry: 0.32 },
+    { dx: 0, dy: -0.22, rx: 0.42, ry: 0.38 },
+    { dx: 0.38, dy: -0.02, rx: 0.38, ry: 0.3 },
+  ],
+  // small round puff
+  [
+    { dx: 0, dy: 0.2, rx: 0.55, ry: 0.2 },
+    { dx: -0.22, dy: -0.1, rx: 0.35, ry: 0.32 },
+    { dx: 0.05, dy: -0.25, rx: 0.36, ry: 0.34 },
+    { dx: 0.3, dy: -0.05, rx: 0.3, ry: 0.26 },
+  ],
+  // wide puffy cluster
+  [
+    { dx: 0, dy: 0.22, rx: 0.85, ry: 0.2 },
+    { dx: -0.5, dy: -0.02, rx: 0.32, ry: 0.26 },
+    { dx: -0.12, dy: -0.2, rx: 0.4, ry: 0.34 },
+    { dx: 0.28, dy: -0.06, rx: 0.36, ry: 0.3 },
+    { dx: 0.6, dy: 0.05, rx: 0.28, ry: 0.22 },
+  ],
+  // lopsided with a tall peak
+  [
+    { dx: 0.05, dy: 0.22, rx: 0.6, ry: 0.18 },
+    { dx: -0.25, dy: -0.05, rx: 0.32, ry: 0.28 },
+    { dx: 0.05, dy: -0.3, rx: 0.38, ry: 0.4 },
+    { dx: 0.32, dy: -0.05, rx: 0.3, ry: 0.26 },
+  ],
+];
+
+const DAY_PALETTES = {
+  night: {
+    skyTop: '#0a0322', skyMid: '#1c0f45', skyBottom: '#3a1360',
+    sunTop: '#fff07a', sunMid: '#ff9d2e', sunBottom: '#ff2ee0',
+    groundTop: '#2a0f4d', groundBottom: '#0a0316',
+    starAlpha: 1, cloudAlpha: 0,
+  },
+  dawn: {
+    skyTop: '#140a1f', skyMid: '#5a3a1a', skyBottom: '#e8a23a',
+    sunTop: '#fff6c8', sunMid: '#ffcc33', sunBottom: '#ff8f2e',
+    groundTop: '#3a2410', groundBottom: '#150a08',
+    starAlpha: 0.5, cloudAlpha: 0.15,
+  },
+  morning: {
+    skyTop: '#073259', skyMid: '#136ab0', skyBottom: '#3f9fd6',
+    sunTop: '#fff4d6', sunMid: '#ffd24a', sunBottom: '#ff9d4a',
+    groundTop: '#173252', groundBottom: '#050e18',
+    starAlpha: 0.05, cloudAlpha: 0.7,
+  },
+  dusk: {
+    skyTop: '#1a0a2e', skyMid: '#7a1f5a', skyBottom: '#ff6fa8',
+    sunTop: '#ffd6e8', sunMid: '#ff5fa0', sunBottom: '#ff2ee0',
+    groundTop: '#3a1030', groundBottom: '#0a0316',
+    starAlpha: 0.4, cloudAlpha: 0.25,
+  },
+};
+
 const Background = {
   horizonY: H * 0.62,
   scroll: 0,
   stars: [],
+  clouds: [],
+  phaseIndex: 0,
+  prevPhaseIndex: 0,
+  transitionT: 999,
+  transitionDuration: 2.5,
+  beginTransition() {
+    this.prevPhaseIndex = this.phaseIndex;
+    this.phaseIndex = (this.phaseIndex + 1) % DAY_PHASES.length;
+    this.transitionT = 0;
+  },
+  resetPhase() {
+    this.phaseIndex = 0;
+    this.prevPhaseIndex = 0;
+    this.transitionT = 999;
+  },
+  get palette() {
+    const t = clamp(this.transitionT / this.transitionDuration, 0, 1);
+    const from = DAY_PALETTES[DAY_PHASES[this.prevPhaseIndex]];
+    const to = DAY_PALETTES[DAY_PHASES[this.phaseIndex]];
+    return {
+      skyTop: lerpColor(from.skyTop, to.skyTop, t),
+      skyMid: lerpColor(from.skyMid, to.skyMid, t),
+      skyBottom: lerpColor(from.skyBottom, to.skyBottom, t),
+      sunTop: lerpColor(from.sunTop, to.sunTop, t),
+      sunMid: lerpColor(from.sunMid, to.sunMid, t),
+      sunBottom: lerpColor(from.sunBottom, to.sunBottom, t),
+      groundTop: lerpColor(from.groundTop, to.groundTop, t),
+      groundBottom: lerpColor(from.groundBottom, to.groundBottom, t),
+      starAlpha: from.starAlpha + (to.starAlpha - from.starAlpha) * t,
+      cloudAlpha: from.cloudAlpha + (to.cloudAlpha - from.cloudAlpha) * t,
+    };
+  },
   init() {
     this.stars = [];
     const layers = [
@@ -273,37 +395,86 @@ const Background = {
         });
       }
     });
+
+    this.clouds = [];
+    const cloudLayers = [
+      { n: 5, speed: 10, size: 40, alpha: 0.35 },
+      { n: 4, speed: 18, size: 60, alpha: 0.5 },
+      { n: 3, speed: 28, size: 85, alpha: 0.65 },
+    ];
+    cloudLayers.forEach((layer) => {
+      for (let i = 0; i < layer.n; i++) {
+        this.clouds.push({
+          x: rand(0, W), y: rand(20, this.horizonY * 0.65),
+          speed: layer.speed, size: layer.size * rand(0.8, 1.2), alpha: layer.alpha,
+          variant: (Math.random() * CLOUD_SHAPES.length) | 0
+        });
+      }
+    });
   },
   update(dt) {
     this.scroll += dt;
+    if (this.transitionT < this.transitionDuration) this.transitionT += dt;
     this.stars.forEach((s) => {
       s.x -= s.speed * dt;
       if (s.x < 0) { s.x = W; s.y = rand(0, this.horizonY); }
     });
+    this.clouds.forEach((c) => {
+      c.x -= c.speed * dt;
+      if (c.x < -c.size * 1.5) {
+        c.x = W + c.size;
+        c.y = rand(20, this.horizonY * 0.65);
+        c.variant = (Math.random() * CLOUD_SHAPES.length) | 0;
+      }
+    });
+  },
+  drawCloud(c, mul) {
+    const a = c.alpha * mul;
+    if (a <= 0.01) return;
+    const lobes = CLOUD_SHAPES[c.variant || 0];
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#eaf6ff';
+    ctx.shadowColor = '#eaf6ff';
+    ctx.shadowBlur = c.size * 0.2;
+    ctx.beginPath();
+    lobes.forEach((l) => {
+      const lx = c.x + l.dx * c.size, ly = c.y + l.dy * c.size;
+      const rx = l.rx * c.size, ry = l.ry * c.size;
+      ctx.moveTo(lx + rx, ly);
+      ctx.ellipse(lx, ly, rx, ry, 0, 0, Math.PI * 2);
+    });
+    ctx.fill();
+    ctx.restore();
   },
   draw() {
+    const pal = this.palette;
+
     // sky gradient
     const sky = ctx.createLinearGradient(0, 0, 0, this.horizonY);
-    sky.addColorStop(0, '#0a0322');
-    sky.addColorStop(0.55, '#1c0f45');
-    sky.addColorStop(1, '#3a1360');
+    sky.addColorStop(0, rgbaStr(pal.skyTop));
+    sky.addColorStop(0.55, rgbaStr(pal.skyMid));
+    sky.addColorStop(1, rgbaStr(pal.skyBottom));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, this.horizonY);
 
     // stars
     this.stars.forEach((s) => {
-      ctx.globalAlpha = s.alpha;
+      ctx.globalAlpha = s.alpha * pal.starAlpha;
       ctx.fillStyle = '#eafcff';
       ctx.fillRect(s.x, s.y, s.size, s.size);
     });
     ctx.globalAlpha = 1;
 
+    // clouds
+    this.clouds.forEach((c) => this.drawCloud(c, pal.cloudAlpha));
+
     // sun
     const sunX = W * 0.72, sunY = this.horizonY - 30, sunR = 76;
     const sunGrad = ctx.createLinearGradient(0, sunY - sunR, 0, sunY + sunR);
-    sunGrad.addColorStop(0, '#fff07a');
-    sunGrad.addColorStop(0.45, '#ff9d2e');
-    sunGrad.addColorStop(1, '#ff2ee0');
+    sunGrad.addColorStop(0, rgbaStr(pal.sunTop));
+    sunGrad.addColorStop(0.45, rgbaStr(pal.sunMid));
+    sunGrad.addColorStop(1, rgbaStr(pal.sunBottom));
     ctx.save();
     ctx.beginPath();
     ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
@@ -311,14 +482,14 @@ const Background = {
     ctx.clip();
     ctx.fillStyle = sunGrad;
     ctx.fillRect(sunX - sunR, sunY - sunR, sunR * 2, sunR * 2);
-    ctx.fillStyle = '#1c0f45';
+    ctx.fillStyle = rgbaStr(pal.skyMid);
     for (let i = 0; i < 6; i++) {
       const ly = sunY + sunR * 0.15 + i * 9;
       ctx.fillRect(sunX - sunR, ly, sunR * 2, 3 + i);
     }
     ctx.restore();
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 157, 46, 0.6)';
+    ctx.strokeStyle = rgbaStr(pal.sunMid, 0.6);
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
@@ -327,15 +498,15 @@ const Background = {
 
     // ground plane
     const groundGrad = ctx.createLinearGradient(0, this.horizonY, 0, H);
-    groundGrad.addColorStop(0, '#2a0f4d');
-    groundGrad.addColorStop(1, '#0a0316');
+    groundGrad.addColorStop(0, rgbaStr(pal.groundTop));
+    groundGrad.addColorStop(1, rgbaStr(pal.groundBottom));
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, this.horizonY, W, H - this.horizonY);
 
     // horizon glow line
     ctx.save();
-    ctx.strokeStyle = '#ff9d2e';
-    ctx.shadowColor = '#ff9d2e';
+    ctx.strokeStyle = rgbaStr(pal.sunMid);
+    ctx.shadowColor = rgbaStr(pal.sunMid);
     ctx.shadowBlur = 14;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -697,8 +868,18 @@ class PlayerBullet {
       ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
       ctx.rotate(this.angle);
       ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
+      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+      ctx.shadowBlur = 3;
+      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-this.w / 2, -this.h / 2, this.w, this.h);
     } else {
       ctx.fillRect(this.x, this.y, this.w, this.h);
+      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+      ctx.shadowBlur = 3;
+      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(this.x, this.y, this.w, this.h);
     }
     ctx.restore();
   }
@@ -716,6 +897,11 @@ class EnemyBullet {
     ctx.beginPath();
     ctx.arc(this.x + this.w / 2, this.y + this.h / 2, this.w / 2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
     ctx.restore();
   }
 }
@@ -1060,6 +1246,7 @@ const Game = {
     this.updateHud();
     this.updateBossBar();
     Music.start();
+    Background.resetPhase();
   },
 
   togglePause() {
@@ -1213,6 +1400,7 @@ const Game = {
   gameOver() {
     this.state = 'gameover';
     Audio_.gameOver();
+    Music.fadeOut(1.5);
     const high = Math.max(this.score, Number(localStorage.getItem(HIGH_SCORE_KEY) || 0));
     localStorage.setItem(HIGH_SCORE_KEY, String(high));
     finalScoreEl.textContent = `FINAL SCORE ${String(this.score).padStart(6, '0')}`;
