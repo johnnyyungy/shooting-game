@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OUTRUNNER — Horizontal Sky Assault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="cab">
+  <div class="cab-glow"></div>
+
+  <header class="marquee">
+    <span class="marquee-text">OUTRUNNER</span>
+    <span class="marquee-sub">HORIZONTAL SKY ASSAULT</span>
+  </header>
+
+  <div class="screen-frame">
+    <div class="screen">
+      <canvas id="game" width="960" height="540"></canvas>
+
+      <div class="scanlines"></div>
+      <div class="vignette"></div>
+
+      <!-- HUD -->
+      <div class="hud">
+        <div class="hud-left">
+          <div class="hud-label">SCORE</div>
+          <div class="hud-value" id="score">000000</div>
+        </div>
+        <div class="hud-center">
+          <div class="hud-label">WAVE</div>
+          <div class="hud-value" id="wave">01</div>
+        </div>
+        <div class="hud-right"></div>
+      </div>
+
+      <div class="powerup-toast" id="powerupToast"></div>
+
+      <div class="boss-bar-wrap hidden" id="bossBarWrap">
+        <div class="boss-bar-label">MINI BOSS</div>
+        <div class="boss-bar"><div class="boss-bar-fill" id="bossBarFill"></div></div>
+      </div>
+
+      <!-- bottom console: ship status, lives, shield, wingman mode -->
+      <div class="hud-bottom">
+        <div class="hud-bottom-group">
+          <div class="hud-label">HULL</div>
+          <div class="hull-bar">
+            <div class="hull-bar-fill" id="hullBarFill"></div>
+          </div>
+        </div>
+        <div class="hud-bottom-group">
+          <div class="hud-label">LIVES</div>
+          <div class="lives" id="lives">
+            <span class="heart"></span><span class="heart"></span><span class="heart"></span>
+          </div>
+        </div>
+        <div class="hud-bottom-group">
+          <div class="hud-label bomb-label">BOMBS</div>
+          <div class="bombs" id="bombs">
+            <span class="bomb"></span><span class="bomb"></span><span class="bomb"></span><span class="bomb"></span><span class="bomb"></span>
+          </div>
+        </div>
+        <div class="hud-bottom-group shield-bar-wrap hidden" id="shieldBarWrap">
+          <div class="hud-label shield-label">SHIELD</div>
+          <div class="shield-bar">
+            <div class="shield-bar-fill" id="shieldBarFill"></div>
+          </div>
+        </div>
+        <div class="hud-bottom-group wingman-mode-label hidden" id="wingmanModeLabel">WINGMEN: FORWARD</div>
+      </div>
+
+      <!-- overlays -->
+      <div class="overlay" id="startOverlay">
+        <h1 class="overlay-title">OUTRUNNER</h1>
+        <p class="overlay-sub">horizontal sky assault</p>
+        <div class="instructions">
+          <div class="key-row"><span class="key">▲</span><span class="key">▼</span><span class="key">◀</span><span class="key">▶</span><span class="or">/</span><span class="key wide">W A S D</span> — maneuver</div>
+          <div class="key-row"><span class="key wide">SPACE</span> — fire cannon</div>
+          <div class="key-row"><span class="key wide">Q</span> — cycle wingman mode</div>
+          <div class="key-row"><span class="key wide">B</span> — bomb</div>
+          <div class="key-row"><span class="key wide">P</span> — pause</div>
+        </div>
+        <button class="press-start" id="startBtn">PRESS START</button>
+        <p class="overlay-hint">or press SPACE / ENTER</p>
+      </div>
+
+      <div class="overlay hidden" id="pauseOverlay">
+        <h2 class="overlay-title small">PAUSED</h2>
+        <button class="press-start" id="resumeBtn">RESUME</button>
+      </div>
+
+      <div class="overlay hidden" id="gameOverOverlay">
+        <h1 class="overlay-title glitch">HULL BREACH</h1>
+        <p class="overlay-sub" id="finalScore">FINAL SCORE 000000</p>
+        <p class="overlay-sub" id="highScore">BEST 000000</p>
+        <button class="press-start" id="retryBtn">RETRY</button>
+        <p class="overlay-hint">or press SPACE / ENTER</p>
+      </div>
+    </div>
+  </div>
+
+  <audio id="bgMusicA" preload="auto"></audio>
+  <audio id="bgMusicB" preload="auto"></audio>
+
+  <div class="cab-footer">
+    <span>© 2026 NEON SKIES CO.</span>
+    <span class="dot">•</span>
+    <span>1 PLAYER</span>
+  </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
