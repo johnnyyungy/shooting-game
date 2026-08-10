@@ -1288,8 +1288,11 @@ class RingCore {
     this.y = this.ring.centerY - this.h / 2;
   }
   get box() { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+  // Once the shell is fully destroyed, the core is exposed permanently and
+  // no longer gated by the spin/stop cycle.
+  get vulnerable() { return this.ring.spinning || this.ring.segs.length === 0; }
   takeHit() {
-    if (!this.ring.spinning) {
+    if (!this.vulnerable) {
       this.hitFlash = 0.08;
       Audio_.shieldBlock();
       Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#aab4c8', 6, 100);
@@ -1298,21 +1301,28 @@ class RingCore {
     this.hp -= 1;
     this.hitFlash = 0.1;
     Audio_.hitEnemy();
-    Particles.burst(this.x + this.w / 2, this.y + this.h / 2, this.ring.color, 10, 170);
+    Particles.burst(this.x + this.w / 2, this.y + this.h / 2, BOSS_COLOR, 10, 170);
     return this.hp <= 0;
   }
   draw() {
     ctx.save();
     ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
     ctx.rotate(this.ring.t * 0.8);
-    const unguarded = this.ring.segs.every((s) => s.hp <= 0);
-    const c = this.hitFlash > 0 ? '#ffffff' : (this.ring.spinning ? this.ring.color : '#4a5568');
+    const vulnerable = this.vulnerable;
+    const c = this.hitFlash > 0 ? '#ffffff' : (vulnerable ? BOSS_COLOR : '#4a5568');
     drawOctagon(this.w / 2);
     ctx.fillStyle = c;
-    ctx.shadowColor = this.ring.spinning ? this.ring.color : 'transparent';
-    ctx.shadowBlur = this.ring.spinning ? (unguarded ? 26 : 14) : 4;
+    ctx.shadowColor = vulnerable ? BOSS_COLOR : 'transparent';
+    ctx.shadowBlur = vulnerable ? 22 : 4;
     ctx.fill();
     ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(this.x + this.w / 2, this.y + this.h / 2, 4 + 1.5 * Math.sin(this.ring.t * 6), 0, Math.PI * 2);
+    ctx.fillStyle = '#ffe66a';
+    ctx.shadowColor = '#ffe66a';
+    ctx.shadowBlur = 10;
+    ctx.fill();
     ctx.shadowBlur = 0;
   }
 }
@@ -1376,11 +1386,13 @@ class RingBoss {
       this.centerX = this.targetX + Math.sin(this.t * 0.4) * 40;
       this.centerY = this.midY + Math.sin(this.t * 0.35) * this.ampY;
 
-      this.phaseTimer -= dt;
-      if (this.phaseTimer <= 0) {
-        this.spinning = !this.spinning;
-        this.phaseTimer = this.spinning ? rand(4, 5) : rand(3.5, 4.5);
-        Game.showToast(this.spinning ? 'CORE VULNERABLE' : 'SHELL VULNERABLE', this.color);
+      if (this.segs.length > 0) {
+        this.phaseTimer -= dt;
+        if (this.phaseTimer <= 0) {
+          this.spinning = !this.spinning;
+          this.phaseTimer = this.spinning ? rand(4, 5) : rand(3.5, 4.5);
+          Game.showToast(this.spinning ? 'CORE VULNERABLE' : 'SHELL VULNERABLE', this.color);
+        }
       }
       if (this.spinning) {
         this.rotation += this.rotationSpeed * dt;
@@ -1389,6 +1401,10 @@ class RingBoss {
           this.fireTimer = rand(2.2, 2.8);
           this.fireBurst();
         }
+      }
+      // The core is a persistent active threat once it's vulnerable, whether
+      // that's during a spin phase or permanently once the shell is gone.
+      if (this.core.vulnerable) {
         this.core.fireTimer -= dt;
         if (this.core.fireTimer <= 0) {
           this.core.fireTimer = rand(0.45, 0.7);
