@@ -1028,15 +1028,17 @@ function damageSegmentsSequentially(boss, amount) {
 class BossEscort {
   constructor(boss, index) {
     this.boss = boss;
-    this.w = 20; this.h = 14;
+    this.w = 40; this.h = 28;
     this.score = 60;
     const side = index % 2 === 0 ? -1 : 1;
     const rank = Math.floor(index / 2);
-    this.offsetX = -20 - rank * 18;
-    this.offsetY = side * (36 + rank * 26);
+    // Trailing V behind the core (away from the player): the rank closest
+    // to the core sits narrow, spreading wider the further back it trails.
+    this.offsetX = 100 + rank * 50;
+    this.offsetY = side * (38 + rank * 30);
     this.t = rand(0, Math.PI * 2);
-    this.hp = 2;
-    this.maxHp = 2;
+    this.maxHp = Math.max(1, Math.round(boss.maxHp / 4));
+    this.hp = this.maxHp;
     this.hitFlash = 0;
     this.fireTimer = rand(1.0, 1.8);
     this.x = boss.x + this.offsetX;
@@ -1069,18 +1071,36 @@ class BossEscort {
     if (this.hp <= 0) return;
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(Math.PI);
     const c = this.hitFlash > 0 ? '#ffffff' : BOSS_COLOR;
     ctx.beginPath();
     ctx.moveTo(this.w / 2, 0);
-    ctx.lineTo(-this.w / 2, -this.h / 2);
-    ctx.lineTo(-this.w / 4, 0);
-    ctx.lineTo(-this.w / 2, this.h / 2);
+    ctx.lineTo(this.w / 2 - 10, -this.h / 2 + 3);
+    ctx.lineTo(this.w / 4, -this.h / 2);
+    ctx.lineTo(-this.w / 2 + 7, -this.h / 2 + 5);
+    ctx.lineTo(-this.w / 2, 0);
+    ctx.lineTo(-this.w / 2 + 7, this.h / 2 - 5);
+    ctx.lineTo(this.w / 4, this.h / 2);
+    ctx.lineTo(this.w / 2 - 10, this.h / 2 - 3);
     ctx.closePath();
-    ctx.fillStyle = c;
+    const grad = ctx.createLinearGradient(-this.w / 2, 0, this.w / 2, 0);
+    grad.addColorStop(0, '#3a0a12');
+    grad.addColorStop(0.55, c);
+    grad.addColorStop(1, '#ffcf5c');
+    ctx.fillStyle = grad;
     ctx.shadowColor = BOSS_COLOR;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 12;
     ctx.fill();
+    ctx.strokeStyle = '#ffe1a8';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 3 + Math.sin(this.t * 6), 0, Math.PI * 2);
+    ctx.fillStyle = '#ffe66a';
+    ctx.shadowColor = '#ffe66a';
+    ctx.shadowBlur = 8;
+    ctx.fill();
+
     ctx.restore();
     ctx.shadowBlur = 0;
   }
@@ -1090,8 +1110,11 @@ class MiniBoss {
   constructor(appearanceIndex) {
     this.w = 84; this.h = 58;
     this.x = W + 120;
-    this.baseY = rand(Background.horizonY * 0.15, Background.horizonY - this.h - 30);
-    this.y = this.baseY;
+    this.skyTopY = Background.horizonY * 0.08;
+    this.skyBottomY = Background.horizonY - this.h - 20;
+    this.y = rand(this.skyTopY, this.skyBottomY);
+    this.targetY = rand(this.skyTopY, this.skyBottomY);
+    this.ySpeed = 55;
     this.targetX = W * 0.66;
     this.enterSpeed = 210;
     this.entering = true;
@@ -1114,7 +1137,12 @@ class MiniBoss {
       if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; this.t = 0; }
     } else {
       this.x = this.targetX + Math.sin(this.t * 0.5) * 50;
-      this.y = clamp(this.baseY + Math.sin(this.t * 1.3) * 70, Background.horizonY * 0.05, Background.horizonY - this.h - 10);
+      const dy = this.targetY - this.y;
+      if (Math.abs(dy) < 12) {
+        this.targetY = rand(this.skyTopY, this.skyBottomY);
+      } else {
+        this.y += Math.sign(dy) * Math.min(Math.abs(dy), this.ySpeed * dt);
+      }
       this.fireTimer -= dt;
       if (this.fireTimer <= 0) {
         this.fireTimer = rand(0.55, 0.9);
@@ -1153,7 +1181,6 @@ class MiniBoss {
     this.escorts.forEach((e) => e.draw());
     ctx.save();
     ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
-    ctx.rotate(Math.PI);
     const c = this.hitFlash > 0 ? '#ffffff' : BOSS_COLOR;
     ctx.beginPath();
     ctx.moveTo(this.w / 2, 0);
