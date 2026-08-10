@@ -427,6 +427,28 @@ canvas#game {
   transform: translateX(-50%) translateY(0);
 }
 
+.debug-tag {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+  padding: 4px 10px;
+  background: rgba(20, 0, 0, 0.75);
+  border: 1px solid #ff3355;
+  border-radius: 4px;
+  color: #ff3355;
+  z-index: 20;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.debug-tag.hidden {
+  display: none;
+}
+
 /* overlays */
 .overlay {
   position: absolute;

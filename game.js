@@ -27,6 +27,7 @@ const bossBarFillEl = document.getElementById('bossBarFill');
 let toastTimeoutHandle = null;
 
 const HIGH_SCORE_KEY = 'neonskies_highscore';
+const DEBUG = new URLSearchParams(location.search).has('debug');
 
 function rand(a, b) { return a + Math.random() * (b - a); }
 function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
@@ -135,6 +136,12 @@ const Audio_ = {
     src.connect(filter).connect(gain).connect(this.ctx.destination);
     src.start(t0);
     this.tone(90, 0.5, 'sawtooth', 0.12, 40);
+  },
+  ringFire() {
+    if (!this.ctx) return;
+    [420, 620].forEach((f, i) => {
+      setTimeout(() => this.tone(f, 0.16, 'sawtooth', 0.06, f * 1.4), i * 60);
+    });
   }
 };
 
@@ -266,6 +273,15 @@ const Input = {
       if (code === 'KeyP' || code === 'Escape') Game.togglePause();
       if (code === 'KeyQ' && Game.state === 'playing' && Game.player) Game.player.cycleWingmanMode();
       if (code === 'KeyB' && Game.state === 'playing' && Game.player) Game.player.useBomb();
+      if (DEBUG && Game.state === 'playing') {
+        if (code === 'Digit1') Game.spawnBossOfType('sentinel');
+        if (code === 'Digit2') Game.spawnBossOfType('ring');
+        if (code === 'Digit3') Game.spawnBossOfType('snake');
+        if (code === 'Digit0') {
+          Game.bossAppearances = { sentinel: 0, ring: 0, snake: 0 };
+          Game.showToast('BOSS TIERS RESET', '#ffffff');
+        }
+      }
       if (code === 'Enter') {
         if (Game.state === 'start') Game.start();
         else if (Game.state === 'gameover') Game.start();
@@ -853,7 +869,9 @@ const ENEMY_TYPES = {
   drone: { w: 30, h: 20, hp: 1, speed: [160, 220], score: 100, color: '#ff2ee0' },
   interceptor: { w: 28, h: 18, hp: 1, speed: [220, 280], score: 150, color: '#7b2eff' },
   cruiser: { w: 46, h: 30, hp: 3, speed: [80, 120], score: 300, color: '#ff9d2e' },
+  sentry: { w: 30, h: 22, hp: 1, speed: [140, 190], score: 200, color: '#4fc3f7' },
 };
+const SHIELD_COLOR = '#6ecbff';
 
 class Enemy {
   constructor(type) {
@@ -869,6 +887,10 @@ class Enemy {
     this.baseY = this.y;
     this.fireTimer = rand(0.6, 1.6);
     this.hitFlash = 0;
+    if (type === 'sentry') {
+      this.shieldAngle = rand(0, Math.PI * 2);
+      this.shieldArc = Math.PI;
+    }
   }
   update(dt, player) {
     this.t += dt;
@@ -886,9 +908,20 @@ class Enemy {
         Bullets.spawnEnemy(this.x, this.y + this.h / 2 - 4, (dx / d) * spd, (dy / d) * spd);
       }
     }
+    if (this.type === 'sentry') {
+      this.shieldAngle += dt * 1.6;
+    }
     if (this.hitFlash > 0) this.hitFlash -= dt;
   }
   get box() { return { x: this.x + 3, y: this.y + 3, w: this.w - 6, h: this.h - 6 }; }
+  isShieldedFrom(bx, by) {
+    if (this.type !== 'sentry') return false;
+    const cx = this.x + this.w / 2, cy = this.y + this.h / 2;
+    const angleToBullet = Math.atan2(by - cy, bx - cx);
+    let diff = angleToBullet - this.shieldAngle;
+    diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    return Math.abs(diff) < this.shieldArc / 2;
+  }
   takeHit() {
     this.hp -= 1;
     this.hitFlash = 0.1;
@@ -921,6 +954,18 @@ class Enemy {
     ctx.shadowBlur = 12;
     ctx.fill();
     ctx.restore();
+    if (this.type === 'sentry') {
+      ctx.save();
+      ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+      ctx.strokeStyle = SHIELD_COLOR;
+      ctx.shadowColor = SHIELD_COLOR;
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.w * 0.75, this.shieldAngle - this.shieldArc / 2, this.shieldAngle + this.shieldArc / 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.shadowBlur = 0;
   }
 }
@@ -937,6 +982,7 @@ const Enemies = {
       let type = 'drone';
       if (wave >= 2 && roll > 0.55) type = 'interceptor';
       if (wave >= 3 && roll > 0.82) type = 'cruiser';
+      if (wave >= 5 && roll > 0.9) type = 'sentry';
       this.list.push(new Enemy(type));
     }
     this.list.forEach((e) => e.update(dt, player));
@@ -946,13 +992,102 @@ const Enemies = {
   clear() { this.list = []; this.spawnTimer = 0; }
 };
 
-/* ============================== MINI BOSS ============================== */
+/* ============================== BOSSES ============================== */
 
 const BOSS_COLOR = '#ff3355';
 const BOSS_TIER_SUFFIXES = ['ALPHA', 'BETA', 'GAMMA', 'DELTA', 'EPSILON', 'ZETA', 'ETA', 'THETA', 'IOTA', 'KAPPA'];
+const BOSS_ROTATION = ['sentinel', 'ring', 'snake'];
+
+function bossTierName(appearanceIndex) {
+  return BOSS_TIER_SUFFIXES[appearanceIndex - 1] || String(appearanceIndex);
+}
+
+// Burns `amount` of damage through a composite boss's *currently vulnerable*
+// segment (always the tail end for the snake), chaining on to the next one
+// exposed if a kill leaves damage remaining.
+function damageSegmentsSequentially(boss, amount) {
+  if (boss.barrageMode) return;
+  let remaining = amount;
+  while (remaining > 0 && boss.segments.length > 0) {
+    const seg = boss.segments[boss.segments.length - 1];
+    const dmg = Math.min(remaining, seg.hp);
+    seg.hp -= dmg;
+    seg.hitFlash = 0.15;
+    remaining -= dmg;
+    if (seg.hp <= 0) {
+      boss.onSegmentDestroyed(seg);
+      if (!boss.isDefeated) {
+        Audio_.explosion();
+        Particles.burst(seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, boss.color, 16, 180);
+        Game.addScore(seg.score || 30);
+      }
+    }
+  }
+}
+
+class BossEscort {
+  constructor(boss, index) {
+    this.boss = boss;
+    this.w = 20; this.h = 14;
+    this.score = 60;
+    const side = index % 2 === 0 ? -1 : 1;
+    const rank = Math.floor(index / 2);
+    this.offsetX = -20 - rank * 18;
+    this.offsetY = side * (36 + rank * 26);
+    this.t = rand(0, Math.PI * 2);
+    this.hp = 2;
+    this.maxHp = 2;
+    this.hitFlash = 0;
+    this.fireTimer = rand(1.0, 1.8);
+    this.x = boss.x + this.offsetX;
+    this.y = boss.y + boss.h / 2 + this.offsetY;
+  }
+  update(dt, player) {
+    this.t += dt;
+    this.x = this.boss.x + this.offsetX;
+    this.y = this.boss.y + this.boss.h / 2 + this.offsetY + Math.sin(this.t * 2) * 6;
+    if (this.hitFlash > 0) this.hitFlash -= dt;
+    if (this.boss.entering) return;
+    this.fireTimer -= dt;
+    if (this.fireTimer <= 0) {
+      this.fireTimer = rand(1.2, 2.0);
+      const dx = (player.x + player.w / 2) - this.x, dy = (player.y + player.h / 2) - this.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const spd = 260;
+      Bullets.spawnEnemy(this.x, this.y, (dx / d) * spd, (dy / d) * spd);
+    }
+  }
+  get box() { return { x: this.x - this.w / 2, y: this.y - this.h / 2, w: this.w, h: this.h }; }
+  takeHit() {
+    this.hp -= 1;
+    this.hitFlash = 0.1;
+    Audio_.hitEnemy();
+    Particles.burst(this.x, this.y, BOSS_COLOR, 8, 150);
+    return this.hp <= 0;
+  }
+  draw() {
+    if (this.hp <= 0) return;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(Math.PI);
+    const c = this.hitFlash > 0 ? '#ffffff' : BOSS_COLOR;
+    ctx.beginPath();
+    ctx.moveTo(this.w / 2, 0);
+    ctx.lineTo(-this.w / 2, -this.h / 2);
+    ctx.lineTo(-this.w / 4, 0);
+    ctx.lineTo(-this.w / 2, this.h / 2);
+    ctx.closePath();
+    ctx.fillStyle = c;
+    ctx.shadowColor = BOSS_COLOR;
+    ctx.shadowBlur = 10;
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+}
 
 class MiniBoss {
-  constructor(waveMilestone) {
+  constructor(appearanceIndex) {
     this.w = 84; this.h = 58;
     this.x = W + 120;
     this.baseY = rand(Background.horizonY * 0.15, Background.horizonY - this.h - 30);
@@ -961,13 +1096,16 @@ class MiniBoss {
     this.enterSpeed = 210;
     this.entering = true;
     this.t = rand(0, Math.PI * 2);
-    const tier = Math.max(1, Math.round(waveMilestone / 15));
-    this.tier = tier;
-    this.name = `SENTINEL-${BOSS_TIER_SUFFIXES[tier - 1] || tier}`;
-    this.maxHp = 18 + tier * 10;
+    this.tier = appearanceIndex;
+    this.name = `SENTINEL-${bossTierName(appearanceIndex)}`;
+    this.color = BOSS_COLOR;
+    this.maxHp = 18 + appearanceIndex * 10;
     this.hp = this.maxHp;
     this.fireTimer = rand(0.6, 1.0);
     this.hitFlash = 0;
+    const escortCount = clamp(appearanceIndex - 1, 0, 4);
+    this.escorts = [];
+    for (let i = 0; i < escortCount; i++) this.escorts.push(new BossEscort(this, i));
   }
   update(dt, player) {
     this.t += dt;
@@ -984,6 +1122,7 @@ class MiniBoss {
       }
     }
     if (this.hitFlash > 0) this.hitFlash -= dt;
+    this.escorts.forEach((e) => e.update(dt, player));
   }
   fire(player) {
     const mx = this.x + 4, my = this.y + this.h / 2;
@@ -993,6 +1132,16 @@ class MiniBoss {
     Bullets.spawnEnemy(mx, my, (dx / d) * spd, (dy / d) * spd);
   }
   get box() { return { x: this.x + 8, y: this.y + 8, w: this.w - 16, h: this.h - 16 }; }
+  get segments() { return [this, ...this.escorts]; }
+  get isDefeated() { return this.hp <= 0; }
+  onSegmentDestroyed(segment) {
+    if (segment !== this) this.escorts = this.escorts.filter((e) => e !== segment);
+  }
+  applyBombDamage(amount) {
+    this.hp -= amount;
+    this.hitFlash = 0.15;
+    Particles.burst(this.x + this.w / 2, this.y + this.h / 2, this.color, 24, 240);
+  }
   takeHit() {
     this.hp -= 1;
     this.hitFlash = 0.08;
@@ -1001,6 +1150,7 @@ class MiniBoss {
     return this.hp <= 0;
   }
   draw() {
+    this.escorts.forEach((e) => e.draw());
     ctx.save();
     ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
     ctx.rotate(Math.PI);
@@ -1036,6 +1186,429 @@ class MiniBoss {
 
     ctx.restore();
     ctx.shadowBlur = 0;
+  }
+}
+
+// 8-sided plate: armor look for the ring's outer shell.
+function drawOctagon(r) {
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const ang = (Math.PI / 4) * i;
+    const px = Math.cos(ang) * r, py = Math.sin(ang) * r;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+class RingSegment {
+  constructor(ring, baseAngle, size) {
+    this.ring = ring;
+    this.baseAngle = baseAngle;
+    this.w = size; this.h = size;
+    this.hp = 9 + (ring.tier - 1) * 3;
+    this.maxHp = this.hp;
+    this.score = 50;
+    this.hitFlash = 0;
+    this.x = 0; this.y = 0; this.angle = baseAngle;
+  }
+  updatePosition() {
+    this.angle = this.baseAngle + this.ring.rotation;
+    this.x = this.ring.centerX + Math.cos(this.angle) * this.ring.radius - this.w / 2;
+    this.y = this.ring.centerY + Math.sin(this.angle) * this.ring.radius - this.h / 2;
+  }
+  get box() { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+  takeHit() {
+    if (this.ring.spinning) {
+      this.hitFlash = 0.08;
+      Audio_.shieldBlock();
+      Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#aab4c8', 5, 90);
+      return false;
+    }
+    this.hp -= 1;
+    this.hitFlash = 0.1;
+    Audio_.hitEnemy();
+    Particles.burst(this.x + this.w / 2, this.y + this.h / 2, this.ring.color, 8, 150);
+    return this.hp <= 0;
+  }
+  draw() {
+    if (this.hp <= 0) return;
+    ctx.save();
+    ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+    const c = this.hitFlash > 0 ? '#ffffff' : (this.ring.spinning ? '#8a97ac' : this.ring.color);
+    drawOctagon(this.w / 2);
+    ctx.fillStyle = c;
+    ctx.shadowColor = c;
+    ctx.shadowBlur = this.ring.spinning ? 6 : 14;
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+}
+
+class RingCore {
+  constructor(ring, appearanceIndex) {
+    this.ring = ring;
+    this.w = 34; this.h = 34;
+    this.maxHp = 24 + (appearanceIndex - 1) * 10;
+    this.hp = this.maxHp;
+    this.score = 400;
+    this.hitFlash = 0;
+    this.fireTimer = rand(0.8, 1.2);
+    this.updatePosition();
+  }
+  updatePosition() {
+    this.x = this.ring.centerX - this.w / 2;
+    this.y = this.ring.centerY - this.h / 2;
+  }
+  get box() { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+  takeHit() {
+    if (!this.ring.spinning) {
+      this.hitFlash = 0.08;
+      Audio_.shieldBlock();
+      Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#aab4c8', 6, 100);
+      return false;
+    }
+    this.hp -= 1;
+    this.hitFlash = 0.1;
+    Audio_.hitEnemy();
+    Particles.burst(this.x + this.w / 2, this.y + this.h / 2, this.ring.color, 10, 170);
+    return this.hp <= 0;
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+    ctx.rotate(this.ring.t * 0.8);
+    const unguarded = this.ring.segs.every((s) => s.hp <= 0);
+    const c = this.hitFlash > 0 ? '#ffffff' : (this.ring.spinning ? this.ring.color : '#4a5568');
+    drawOctagon(this.w / 2);
+    ctx.fillStyle = c;
+    ctx.shadowColor = this.ring.spinning ? this.ring.color : 'transparent';
+    ctx.shadowBlur = this.ring.spinning ? (unguarded ? 26 : 14) : 4;
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+}
+
+class RingBoss {
+  constructor(appearanceIndex) {
+    this.tier = appearanceIndex;
+    this.name = `RING-${bossTierName(appearanceIndex)}`;
+    this.color = '#00e5ff';
+    this.w = 160; this.h = 160;
+    this.centerX = W + 140;
+    this.skyTop = Background.horizonY * 0.1;
+    this.skyBottom = Background.horizonY - this.h * 0.25;
+    this.midY = (this.skyTop + this.skyBottom) / 2;
+    this.ampY = (this.skyBottom - this.skyTop) / 2;
+    this.centerY = this.midY;
+    this.targetX = W * 0.62;
+    this.enterSpeed = 200;
+    this.entering = true;
+    this.t = rand(0, Math.PI * 2);
+    this.rotation = 0;
+    this.rotationSpeed = 2.2;
+    this.radius = 78;
+    this.spinning = true;
+    this.phaseTimer = rand(4, 5);
+    const count = clamp(6 + (appearanceIndex - 1) * 2, 6, 14);
+    const spacing = (Math.PI * 2 * this.radius) / count;
+    const segSize = clamp(spacing - 14, 24, 70);
+    this.segs = [];
+    for (let i = 0; i < count; i++) this.segs.push(new RingSegment(this, i * (Math.PI * 2 / count), segSize));
+    this.core = new RingCore(this, appearanceIndex);
+    this.totalMaxHp = this.segs.reduce((sum, s) => sum + s.maxHp, 0) + this.core.maxHp;
+    this.fireTimer = rand(2.0, 2.6);
+    this.segs.forEach((s) => s.updatePosition());
+  }
+  get x() { return this.centerX - this.w / 2; }
+  get y() { return this.centerY - this.h / 2; }
+  get segments() { return [...this.segs, this.core]; }
+  get isDefeated() { return this.core.hp <= 0; }
+  get hp() { return this.segs.reduce((sum, s) => sum + Math.max(0, s.hp), 0) + Math.max(0, this.core.hp); }
+  get maxHp() { return this.totalMaxHp; }
+  onSegmentDestroyed(segment) {
+    if (segment === this.core) return;
+    this.segs = this.segs.filter((s) => s !== segment);
+    if (this.segs.length === 0) {
+      Game.showToast('SHELL DESTROYED', this.color);
+    }
+  }
+  applyBombDamage(amount) {
+    // A bomb's blast reaches the core directly, bypassing the shell entirely.
+    this.core.hp -= amount;
+    this.core.hitFlash = 0.15;
+    Particles.burst(this.core.x + this.core.w / 2, this.core.y + this.core.h / 2, this.color, 20, 200);
+  }
+  update(dt, player) {
+    this.t += dt;
+    if (this.entering) {
+      this.centerX -= this.enterSpeed * dt;
+      if (this.centerX <= this.targetX) { this.centerX = this.targetX; this.entering = false; this.t = 0; }
+    } else {
+      this.centerX = this.targetX + Math.sin(this.t * 0.4) * 40;
+      this.centerY = this.midY + Math.sin(this.t * 0.35) * this.ampY;
+
+      this.phaseTimer -= dt;
+      if (this.phaseTimer <= 0) {
+        this.spinning = !this.spinning;
+        this.phaseTimer = this.spinning ? rand(4, 5) : rand(3.5, 4.5);
+        Game.showToast(this.spinning ? 'CORE VULNERABLE' : 'SHELL VULNERABLE', this.color);
+      }
+      if (this.spinning) {
+        this.rotation += this.rotationSpeed * dt;
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0) {
+          this.fireTimer = rand(2.2, 2.8);
+          this.fireBurst();
+        }
+        this.core.fireTimer -= dt;
+        if (this.core.fireTimer <= 0) {
+          this.core.fireTimer = rand(0.45, 0.7);
+          this.fireCoreShot(player);
+        }
+      }
+    }
+    this.segs.forEach((s) => {
+      s.updatePosition();
+      if (s.hitFlash > 0) s.hitFlash -= dt;
+    });
+    this.core.updatePosition();
+    if (this.core.hitFlash > 0) this.core.hitFlash -= dt;
+  }
+  fireBurst() {
+    const alive = this.segs.filter((s) => s.hp > 0);
+    if (alive.length === 0) return;
+    const spd = 220;
+    Audio_.ringFire();
+    alive.forEach((s) => {
+      Bullets.spawnEnemy(s.x + s.w / 2, s.y + s.h / 2, Math.cos(s.angle) * spd, Math.sin(s.angle) * spd);
+    });
+  }
+  fireCoreShot(player) {
+    const dx = (player.x + player.w / 2) - this.centerX, dy = (player.y + player.h / 2) - this.centerY;
+    const d = Math.hypot(dx, dy) || 1;
+    const spd = 260;
+    Bullets.spawnEnemy(this.centerX, this.centerY, (dx / d) * spd, (dy / d) * spd);
+  }
+  draw() {
+    this.core.draw();
+    this.segs.forEach((s) => s.draw());
+  }
+}
+
+const SNAKE_HEAD_COLOR = '#148F2B';
+
+class SnakeSegment {
+  constructor(snake, index, isHead, totalCount) {
+    this.snake = snake;
+    this.index = index;
+    this.isHead = isHead;
+    this.w = isHead ? 42 : 32; this.h = isHead ? 36 : 28;
+    this.hp = isHead ? 16 + (snake.tier - 1) * 8 : 4 + (snake.tier - 1) * 2;
+    this.maxHp = this.hp;
+    this.score = isHead ? 120 : 40;
+    this.hitFlash = 0;
+    this.x = 0; this.y = 0;
+    if (!isHead) {
+      const t = totalCount > 2 ? (index - 1) / (totalCount - 2) : 0;
+      this.bodyColor = rgbaStr(lerpColor(SNAKE_HEAD_COLOR, snake.color, t));
+    }
+  }
+  updatePosition() {
+    const s = this.snake;
+    const segT = s.t * s.pathSpeed - this.index * s.phaseDelay;
+    this.x = s.figureCenterX + s.entryOffsetX + Math.sin(2 * segT) * s.ampX;
+    this.y = s.midY + Math.sin(segT) * s.ampY;
+    // Exact instantaneous velocity from the derivative of the position formula,
+    // used to orient each segment along its actual direction of travel.
+    const entryVx = s.entering ? -s.enterSpeed : 0;
+    const vx = entryVx + Math.cos(2 * segT) * 2 * s.pathSpeed * s.ampX;
+    const vy = Math.cos(segT) * s.pathSpeed * s.ampY;
+    this.heading = Math.atan2(vy, vx);
+  }
+  get box() { return { x: this.x - this.w / 2, y: this.y - this.h / 2, w: this.w, h: this.h }; }
+  // Only the current tail-end segment can be damaged — destruction proceeds
+  // strictly back-to-front, so the head is only ever last.
+  get isVulnerable() {
+    if (this.snake.barrageMode) return false;
+    const tail = this.snake.segs[this.snake.segs.length - 1];
+    return tail === this;
+  }
+  takeHit() {
+    if (!this.isVulnerable) {
+      this.hitFlash = 0.08;
+      Audio_.shieldBlock();
+      Particles.burst(this.x, this.y, '#aab4c8', 5, 90);
+      return false;
+    }
+    this.hp -= 1;
+    this.hitFlash = 0.1;
+    Audio_.hitEnemy();
+    Particles.burst(this.x, this.y, this.snake.color, this.isHead ? 16 : 8, this.isHead ? 200 : 140);
+    return this.hp <= 0;
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.heading || 0);
+    const vulnerable = this.isVulnerable;
+    const c = this.hitFlash > 0 ? '#ffffff' : (vulnerable ? BOSS_COLOR : (this.isHead ? SNAKE_HEAD_COLOR : this.bodyColor));
+    ctx.beginPath();
+    if (this.isHead) {
+      ctx.moveTo(this.w / 2, 0);
+      ctx.lineTo(this.w / 2 - 10, -this.h / 2);
+      ctx.lineTo(-this.w / 2, -this.h / 2 + 6);
+      ctx.lineTo(-this.w / 2, this.h / 2 - 6);
+      ctx.lineTo(this.w / 2 - 10, this.h / 2);
+    } else {
+      const r = this.w / 2;
+      for (let i = 0; i < 6; i++) {
+        const ang = (Math.PI / 3) * i;
+        const px = Math.cos(ang) * r, py = Math.sin(ang) * r * 0.85;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+    }
+    ctx.closePath();
+    ctx.fillStyle = c;
+    ctx.shadowColor = c;
+    ctx.shadowBlur = vulnerable ? (this.isHead ? 20 : 14) : (this.isHead ? 8 : 5);
+    ctx.fill();
+    if (this.isHead) {
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#ffe1a8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(this.w * 0.08, 0, 6 + 2 * Math.sin(this.snake.t * 6), 0, Math.PI * 2);
+      ctx.fillStyle = '#ffe66a';
+      ctx.shadowColor = '#ffe66a';
+      ctx.shadowBlur = 12;
+      ctx.fill();
+    } else if (vulnerable) {
+      const tr = this.w * 0.22;
+      ctx.beginPath();
+      ctx.moveTo(tr, 0);
+      ctx.lineTo(-tr * 0.6, -tr * 0.85);
+      ctx.lineTo(-tr * 0.6, tr * 0.85);
+      ctx.closePath();
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 10;
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+}
+
+class SnakeBoss {
+  constructor(appearanceIndex) {
+    this.tier = appearanceIndex;
+    this.name = `VIPER-${bossTierName(appearanceIndex)}`;
+    this.color = '#c8ff2e';
+    this.basePathSpeed = 0.8;
+    this.phaseDelay = 0.5;
+    this.figureCenterX = W * 0.8;
+    this.ampX = 75;
+    this.headExposed = false;
+    this.entryOffsetX = W * 0.45;
+    this.enterSpeed = 220;
+    this.entering = true;
+    this.t = rand(0, Math.PI * 2);
+    this.fireTimer = rand(1.0, 1.6);
+    this.barrageMode = false;
+    this.barrageTimer = rand(6, 8);
+    this.barrageDuration = 0;
+    this.barrageFireTimer = 0;
+    this.w = 90; this.h = 90;
+    this.skyTop = Background.horizonY * 0.1;
+    this.skyBottom = Background.horizonY - this.h * 0.25;
+    this.midY = (this.skyTop + this.skyBottom) / 2;
+    this.ampY = (this.skyBottom - this.skyTop) / 2;
+    const count = clamp(7 + (appearanceIndex - 1) * 2, 7, 17);
+    this.segs = [];
+    for (let i = 0; i < count; i++) this.segs.push(new SnakeSegment(this, i, i === 0, count));
+    this.totalMaxHp = this.segs.reduce((sum, s) => sum + s.maxHp, 0);
+    this.segs.forEach((s) => s.updatePosition());
+  }
+  get x() { return (this.segs[0] ? this.segs[0].x : this.figureCenterX) - this.w / 2; }
+  get y() { return (this.segs[0] ? this.segs[0].y : this.midY) - this.h / 2; }
+  get segments() { return this.segs; }
+  get isDefeated() { return this.segs.length === 0; }
+  get hp() { return this.segs.reduce((sum, s) => sum + Math.max(0, s.hp), 0); }
+  get maxHp() { return this.totalMaxHp; }
+  get pathSpeed() { return this.basePathSpeed * (this.headExposed ? 1.4 : 1); }
+  onSegmentDestroyed(segment) {
+    this.segs = this.segs.filter((s) => s !== segment);
+    if (this.segs.length === 1 && this.segs[0].isHead && !this.headExposed) {
+      this.headExposed = true;
+      Game.showToast('HEAD EXPOSED', this.color);
+      Audio_.bossWarning();
+    }
+  }
+  applyBombDamage(amount) {
+    damageSegmentsSequentially(this, amount);
+  }
+  update(dt, player) {
+    this.t += dt;
+    if (this.entering) {
+      this.entryOffsetX -= this.enterSpeed * dt;
+      if (this.entryOffsetX <= 0) { this.entryOffsetX = 0; this.entering = false; }
+    } else {
+      this.barrageTimer -= dt;
+      if (!this.barrageMode && this.barrageTimer <= 0) {
+        this.barrageMode = true;
+        this.barrageDuration = 2.6;
+        this.barrageFireTimer = 0;
+        Game.showToast('VIPER BARRAGE', this.color);
+        Audio_.bossWarning();
+      }
+      if (this.barrageMode) {
+        this.barrageDuration -= dt;
+        this.barrageFireTimer -= dt;
+        if (this.barrageFireTimer <= 0) {
+          this.barrageFireTimer = rand(0.14, 0.22);
+          this.fireBarrageShot(player);
+        }
+        if (this.barrageDuration <= 0) {
+          this.barrageMode = false;
+          this.barrageTimer = rand(6, 8);
+        }
+      } else {
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0) {
+          this.fireTimer = this.headExposed ? rand(0.6, 0.9) : rand(1.1, 1.6);
+          this.fire(player);
+        }
+      }
+    }
+    this.segs.forEach((s) => {
+      s.updatePosition();
+      if (s.hitFlash > 0) s.hitFlash -= dt;
+    });
+  }
+  fire(player) {
+    const head = this.segs[0];
+    if (!head) return;
+    const dx = (player.x + player.w / 2) - head.x, dy = (player.y + player.h / 2) - head.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const spd = 280;
+    Bullets.spawnEnemy(head.x, head.y, (dx / d) * spd, (dy / d) * spd);
+  }
+  fireBarrageShot(player) {
+    const alive = this.segs.filter((s) => s.hp > 0);
+    if (alive.length === 0) return;
+    const s = pick(alive);
+    const dx = (player.x + player.w / 2) - s.x, dy = (player.y + player.h / 2) - s.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const spd = 240;
+    Bullets.spawnEnemy(s.x, s.y, (dx / d) * spd, (dy / d) * spd);
+    Audio_.ringFire();
+  }
+  draw() {
+    for (let i = this.segs.length - 1; i >= 0; i--) this.segs[i].draw();
   }
 }
 
@@ -1146,6 +1719,8 @@ const Game = {
   player: null,
   boss: null,
   lastBossWave: 0,
+  bossRotationIndex: 0,
+  bossAppearances: { sentinel: 0, ring: 0, snake: 0 },
   shakeTime: 0,
   shakeMag: 0,
   lifeLostFlashTime: 0,
@@ -1160,6 +1735,10 @@ const Game = {
     document.getElementById('startBtn').addEventListener('click', () => this.start());
     document.getElementById('resumeBtn').addEventListener('click', () => this.togglePause());
     document.getElementById('retryBtn').addEventListener('click', () => this.start());
+    if (DEBUG) {
+      document.getElementById('debugTag').classList.remove('hidden');
+      console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Ring/Snake, 0 = reset boss tiers');
+    }
     requestAnimationFrame((t) => this.loop(t));
   },
 
@@ -1174,6 +1753,8 @@ const Game = {
     PowerUps.clear();
     this.boss = null;
     this.lastBossWave = 0;
+    this.bossRotationIndex = 0;
+    this.bossAppearances = { sentinel: 0, ring: 0, snake: 0 };
     this.lifeLostFlashTime = 0;
     this.bombFlashTime = 0;
     this.dangerPulseT = 0;
@@ -1211,11 +1792,9 @@ const Game = {
     Enemies.list = [];
     Bullets.enemy = [];
     if (this.boss) {
-      this.boss.hp -= 9;
-      this.boss.hitFlash = 0.15;
-      Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, BOSS_COLOR, 24, 240);
+      this.boss.applyBombDamage(9);
       this.updateBossBar();
-      if (this.boss.hp <= 0) this.defeatBoss();
+      if (this.boss.isDefeated) this.defeatBoss();
     }
     Audio_.bombBlast();
     this.shake(0.4, 12);
@@ -1317,10 +1896,20 @@ const Game = {
     }
   },
 
-  spawnBoss(milestone) {
-    this.boss = new MiniBoss(milestone);
+  spawnBoss() {
+    const type = BOSS_ROTATION[this.bossRotationIndex % BOSS_ROTATION.length];
+    this.bossRotationIndex++;
+    this.spawnBossOfType(type);
+  },
+
+  spawnBossOfType(type) {
+    this.bossAppearances[type] = (this.bossAppearances[type] || 0) + 1;
+    const appearance = this.bossAppearances[type];
+    if (type === 'ring') this.boss = new RingBoss(appearance);
+    else if (type === 'snake') this.boss = new SnakeBoss(appearance);
+    else this.boss = new MiniBoss(appearance);
     bossBarLabelEl.textContent = this.boss.name;
-    this.showToast(`${this.boss.name} INCOMING`, BOSS_COLOR);
+    this.showToast(`${this.boss.name} INCOMING`, this.boss.color);
     Audio_.bossWarning();
     this.updateBossBar();
   },
@@ -1328,13 +1917,14 @@ const Game = {
   defeatBoss() {
     const tier = this.boss.tier;
     const name = this.boss.name;
+    const color = this.boss.color;
     Audio_.explosion();
     this.shake(0.5, 14);
-    Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, BOSS_COLOR, 40, 260);
+    Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, color, 40, 260);
     this.boss = null;
     this.updateBossBar();
     this.addScore(1500 + tier * 500);
-    this.showToast(`${name} DESTROYED`, BOSS_COLOR);
+    this.showToast(`${name} DESTROYED`, color);
   },
 
   gameOver() {
@@ -1360,7 +1950,7 @@ const Game = {
     const bossMilestone = Math.floor(this.wave / 15) * 15;
     if (bossMilestone > 0 && bossMilestone !== this.lastBossWave && !this.boss) {
       this.lastBossWave = bossMilestone;
-      this.spawnBoss(bossMilestone);
+      this.spawnBoss();
     }
     if (this.boss) this.boss.update(dt, this.player);
 
@@ -1369,6 +1959,12 @@ const Game = {
       for (const e of Enemies.list) {
         if (b._dead || e.hp <= 0) continue;
         if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, e.box)) {
+          if (e.isShieldedFrom(b.x, b.y)) {
+            b._dead = true;
+            Audio_.shieldBlock();
+            Particles.burst(b.x, b.y, SHIELD_COLOR, 6, 100);
+            continue;
+          }
           b._dead = true;
           if (e.takeHit()) {
             e.hp = 0;
@@ -1379,11 +1975,23 @@ const Game = {
         }
       }
       if (!b._dead && this.boss) {
-        if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, this.boss.box)) {
-          b._dead = true;
-          const bossDead = this.boss.takeHit();
-          this.updateBossBar();
-          if (bossDead) this.defeatBoss();
+        for (const seg of this.boss.segments) {
+          if (seg.hp <= 0) continue;
+          if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, seg.box)) {
+            b._dead = true;
+            const died = seg.takeHit();
+            if (died) {
+              this.boss.onSegmentDestroyed(seg);
+              if (!this.boss.isDefeated) {
+                Audio_.explosion();
+                Particles.burst(seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, this.boss.color, 16, 180);
+                this.addScore(seg.score || 30);
+              }
+            }
+            this.updateBossBar();
+            if (this.boss.isDefeated) this.defeatBoss();
+            break;
+          }
         }
       }
       if (!b._dead) {
@@ -1428,10 +2036,15 @@ const Game = {
     Enemies.list = Enemies.list.filter((e) => e.hp > 0);
 
     // boss vs player
-    if (this.boss && rectsOverlap(this.boss.box, this.player.hitbox)) {
-      this.player.hit();
-      this.updateHud();
-      if (this.player.lives <= 0) { this.gameOver(); return; }
+    if (this.boss) {
+      for (const seg of this.boss.segments) {
+        if (seg.hp > 0 && rectsOverlap(seg.box, this.player.hitbox)) {
+          this.player.hit();
+          this.updateHud();
+          if (this.player.lives <= 0) { this.gameOver(); return; }
+          break;
+        }
+      }
     }
 
     // power-ups vs player
