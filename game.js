@@ -1555,9 +1555,15 @@ class SnakeBoss {
     this.name = `VIPER-${bossTierName(appearanceIndex)}`;
     this.color = '#c8ff2e';
     this.basePathSpeed = 0.8;
-    this.phaseDelay = 0.5;
+    const count = clamp(7 + (appearanceIndex - 1) * 2, 7, 17);
+    // Cap the total phase spread across the body well under a full loop
+    // (2*PI) so long snakes never lap themselves and overlap the head.
+    this.phaseDelay = count > 1 ? 4.5 / (count - 1) : 0.5;
     this.figureCenterX = W * 0.8;
     this.ampX = 75;
+    this.ampXTarget = this.ampX;
+    this.figureCenterXTarget = this.figureCenterX;
+    this.driftTimer = rand(5, 8);
     this.headExposed = false;
     this.entryOffsetX = W * 0.45;
     this.entryDecayRate = 2.5;
@@ -1574,7 +1580,6 @@ class SnakeBoss {
     this.skyBottom = Background.horizonY - this.h * 0.25;
     this.midY = (this.skyTop + this.skyBottom) / 2;
     this.ampY = (this.skyBottom - this.skyTop) / 2;
-    const count = clamp(7 + (appearanceIndex - 1) * 2, 7, 17);
     this.segs = [];
     for (let i = 0; i < count; i++) this.segs.push(new SnakeSegment(this, i, i === 0, count));
     this.totalMaxHp = this.segs.reduce((sum, s) => sum + s.maxHp, 0);
@@ -1608,6 +1613,19 @@ class SnakeBoss {
       this.entryOffsetX -= this.entryOffsetX * this.entryDecayRate * dt;
       if (this.entryOffsetX < 2) { this.entryOffsetX = 0; this.entering = false; }
     } else {
+      // Slowly retarget the loop's width/position so it's not the exact same
+      // trail every cycle. Values are eased toward their targets each frame
+      // (never snapped) so this never introduces a position discontinuity.
+      this.driftTimer -= dt;
+      if (this.driftTimer <= 0) {
+        this.driftTimer = rand(5, 8);
+        this.ampXTarget = rand(55, 95);
+        this.figureCenterXTarget = rand(W * 0.72, W * 0.88);
+      }
+      const driftEase = Math.min(1, 1.2 * dt);
+      this.ampX += (this.ampXTarget - this.ampX) * driftEase;
+      this.figureCenterX += (this.figureCenterXTarget - this.figureCenterX) * driftEase;
+
       this.barrageTimer -= dt;
       if (!this.barrageMode && this.barrageTimer <= 0) {
         this.barrageMode = true;
