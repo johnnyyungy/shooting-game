@@ -1417,12 +1417,15 @@ class SnakeSegment {
   }
   updatePosition() {
     const s = this.snake;
-    const segT = s.t * s.pathSpeed - this.index * s.phaseDelay;
+    // pathPhase is accumulated each frame (phase += dt * pathSpeed) rather than
+    // derived as t * pathSpeed, so a mid-fight pathSpeed change (headExposed's
+    // speed-up) alters the rate going forward without snapping the position.
+    const segT = s.pathPhase - this.index * s.phaseDelay;
     this.x = s.figureCenterX + s.entryOffsetX + Math.sin(2 * segT) * s.ampX;
     this.y = s.midY + Math.sin(segT) * s.ampY;
     // Exact instantaneous velocity from the derivative of the position formula,
     // used to orient each segment along its actual direction of travel.
-    const entryVx = s.entering ? -s.enterSpeed : 0;
+    const entryVx = s.entering ? -s.entryDecayRate * s.entryOffsetX : 0;
     const vx = entryVx + Math.cos(2 * segT) * 2 * s.pathSpeed * s.ampX;
     const vy = Math.cos(segT) * s.pathSpeed * s.ampY;
     this.heading = Math.atan2(vy, vx);
@@ -1514,9 +1517,10 @@ class SnakeBoss {
     this.ampX = 75;
     this.headExposed = false;
     this.entryOffsetX = W * 0.45;
-    this.enterSpeed = 220;
+    this.entryDecayRate = 2.5;
     this.entering = true;
     this.t = rand(0, Math.PI * 2);
+    this.pathPhase = rand(0, Math.PI * 2);
     this.fireTimer = rand(1.0, 1.6);
     this.barrageMode = false;
     this.barrageTimer = rand(6, 8);
@@ -1553,9 +1557,13 @@ class SnakeBoss {
   }
   update(dt, player) {
     this.t += dt;
+    this.pathPhase += dt * this.pathSpeed;
     if (this.entering) {
-      this.entryOffsetX -= this.enterSpeed * dt;
-      if (this.entryOffsetX <= 0) { this.entryOffsetX = 0; this.entering = false; }
+      // Ease the entry offset toward 0 instead of moving at a constant speed
+      // and stopping dead — an instant velocity cutoff read as a visible jump
+      // once the heading was computed from it.
+      this.entryOffsetX -= this.entryOffsetX * this.entryDecayRate * dt;
+      if (this.entryOffsetX < 2) { this.entryOffsetX = 0; this.entering = false; }
     } else {
       this.barrageTimer -= dt;
       if (!this.barrageMode && this.barrageTimer <= 0) {
