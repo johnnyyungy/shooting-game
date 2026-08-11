@@ -152,6 +152,7 @@ const MUSIC_TRACKS = [
   encodeURI('Horizons - Alex Jones _ Xander Jones.mp3'),
   encodeURI('Midnight - Dan Henig.mp3'),
   encodeURI('Rinse Repeat - DivKid.mp3'),
+  encodeURI('Fly High - Gunnar Olsen.mp3'),
 ];
 
 const Music = {
@@ -301,7 +302,7 @@ const Input = {
 
 /* ============================== BACKGROUND ============================== */
 
-const DAY_PHASES = ['night', 'dawn', 'morning', 'dusk'];
+const DAY_PHASES = ['night', 'dawn', 'morning', 'dusk', 'zenith'];
 
 const DAY_PALETTES = {
   night: {
@@ -327,6 +328,12 @@ const DAY_PALETTES = {
     sunTop: '#ffd6e8', sunMid: '#ff5fa0', sunBottom: '#ff2ee0',
     groundTop: '#3a1030', groundBottom: '#0a0316',
     starAlpha: 0.4,
+  },
+  zenith: {
+    skyTop: '#020f14', skyMid: '#0a5568', skyBottom: '#17b8d6',
+    sunTop: '#fff4d6', sunMid: '#ffd24a', sunBottom: '#ff9d4a',
+    groundTop: '#0a3a4a', groundBottom: '#020f14',
+    starAlpha: 0.45,
   },
 };
 
