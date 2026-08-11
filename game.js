@@ -27,10 +27,29 @@ const weaponsEl = document.getElementById('weapons');
 const bossBarWrapEl = document.getElementById('bossBarWrap');
 const bossBarLabelEl = document.getElementById('bossBarLabel');
 const bossBarFillEl = document.getElementById('bossBarFill');
+const difficultyButtons = document.querySelectorAll('.diff-btn');
 let toastTimeoutHandle = null;
 
-const HIGH_SCORE_KEY = 'neonskies_highscore';
+const HIGH_SCORE_KEYS = {
+  easy: 'neonskies_highscore_easy',
+  normal: 'neonskies_highscore_normal',
+  hard: 'neonskies_highscore_hard',
+};
+const DIFFICULTY_KEY = 'neonskies_difficulty';
 const DEBUG = new URLSearchParams(location.search).has('debug');
+
+// Each difficulty scales a small, deliberately limited set of levers rather
+// than touching everything: fire rate (global), Spread's arc specifically
+// (the actual mechanism behind its wide simultaneous coverage), enemy
+// toughness/speed tier, and a score multiplier. Difficulties get separate
+// best-score tracking (HIGH_SCORE_KEYS) rather than one shared leaderboard,
+// since the multiplier alone can't equalize how much further an easier
+// difficulty lets a run survive.
+const DIFFICULTY_PRESETS = {
+  easy: { label: 'EASY', cooldownMult: 0.85, spreadArcMult: 1.15, tierShift: -1, scoreMult: 0.75 },
+  normal: { label: 'NORMAL', cooldownMult: 1, spreadArcMult: 1, tierShift: 0, scoreMult: 1 },
+  hard: { label: 'HARD', cooldownMult: 1.15, spreadArcMult: 0.8, tierShift: 1, scoreMult: 1.5 },
+};
 
 function rand(a, b) { return a + Math.random() * (b - a); }
 function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
@@ -698,16 +717,18 @@ class Player {
     if (Input.firePressed && this.fireCooldown <= 0) {
       const gx = this.x + this.w - 6, gy = this.y + this.h / 2 - 2;
       const level = this.weapons[this.activeWeapon] ? this.weapons[this.activeWeapon].level : 1;
+      const diff = DIFFICULTY_PRESETS[Game.difficulty];
       if (this.activeWeapon === 'spread') {
         const cfg = WEAPON_LEVELS.spread[level - 1];
-        this.fireCooldown = cfg.cooldown;
-        const step = cfg.count > 1 ? cfg.arc / (cfg.count - 1) : 0;
+        this.fireCooldown = cfg.cooldown * diff.cooldownMult;
+        const arc = cfg.arc * diff.spreadArcMult;
+        const step = cfg.count > 1 ? arc / (cfg.count - 1) : 0;
         for (let i = 0; i < cfg.count; i++) {
-          Bullets.spawnPlayer(gx, gy, -cfg.arc / 2 + i * step, null, null, level);
+          Bullets.spawnPlayer(gx, gy, -arc / 2 + i * step, null, null, level);
         }
       } else if (this.activeWeapon === 'rapid') {
         const cfg = WEAPON_LEVELS.rapid[level - 1];
-        this.fireCooldown = cfg.cooldown;
+        this.fireCooldown = cfg.cooldown * diff.cooldownMult;
         if (cfg.streams >= 3) {
           Bullets.spawnPlayer(gx, gy - 8, 0, null, null, level);
           Bullets.spawnPlayer(gx, gy, 0, null, null, level);
@@ -718,14 +739,14 @@ class Player {
         }
       } else if (this.activeWeapon === 'pierce') {
         const cfg = WEAPON_LEVELS.pierce[level - 1];
-        this.fireCooldown = cfg.cooldown;
+        this.fireCooldown = cfg.cooldown * diff.cooldownMult;
         Bullets.spawnPlayer(gx, gy, 0, '#8aff2e', '#5cff00', level, { pierce: cfg.pierceCount });
       } else if (this.activeWeapon === 'chain') {
         const cfg = WEAPON_LEVELS.chain[level - 1];
-        this.fireCooldown = cfg.cooldown;
+        this.fireCooldown = cfg.cooldown * diff.cooldownMult;
         Bullets.spawnPlayer(gx, gy, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius });
       } else {
-        this.fireCooldown = 0.14;
+        this.fireCooldown = 0.14 * diff.cooldownMult;
         Bullets.spawnPlayer(gx, gy);
       }
       Audio_.shoot();
@@ -1071,9 +1092,13 @@ const ENEMY_TYPES = {
 };
 const SHIELD_COLOR = '#6ecbff';
 
-// Individual enemy stats step up every 12 waves (HP on the ranged types, speed
+// Individual enemy stats step up every 15 waves (HP on the ranged types, speed
 // on everything) so late waves are individually tougher, not just more numerous.
-function waveTier(wave) { return Math.min(Math.floor(wave / 15), 8); }
+// Difficulty shifts this up/down by roughly a tier (DIFFICULTY_PRESETS.tierShift).
+function waveTier(wave) {
+  const shift = DIFFICULTY_PRESETS[Game.difficulty].tierShift;
+  return clamp(Math.floor(wave / 15) + shift, 0, 8);
+}
 
 class Enemy {
   constructor(type, wave = 1, fixedY) {
@@ -2190,15 +2215,21 @@ const WEAPON_MAX_LEVEL = 3;
 // multiplier — Spread widens its fan, Rapid adds a stream, Pierce/Chain
 // extend their reach.
 const WEAPON_LEVELS = {
+  // Spread trades width for rate as it levels — wider coverage, but cooldown
+  // eases off instead of also getting faster, so it stays a crowd-control
+  // weapon rather than also becoming the highest raw-DPS option.
   spread: [
     { count: 3, arc: 0.22, cooldown: 0.17 },
-    { count: 5, arc: 0.32, cooldown: 0.16 },
-    { count: 7, arc: 0.42, cooldown: 0.15 },
+    { count: 5, arc: 0.32, cooldown: 0.19 },
+    { count: 7, arc: 0.42, cooldown: 0.22 },
   ],
+  // Rapid leans hard into single-target burst DPS instead of trying to
+  // match Spread's coverage — narrow streams, but by far the fastest fire
+  // rate at max level, so it's the clear pick against one tough target.
   rapid: [
     { streams: 2, cooldown: 0.09 },
-    { streams: 2, cooldown: 0.07 },
-    { streams: 3, cooldown: 0.07 },
+    { streams: 2, cooldown: 0.05 },
+    { streams: 3, cooldown: 0.04 },
   ],
   pierce: [
     { pierceCount: 2, cooldown: 0.16 },
@@ -2307,6 +2338,7 @@ const PowerUps = {
 
 const Game = {
   state: 'start',
+  difficulty: 'normal',
   score: 0,
   wave: 1,
   player: null,
@@ -2328,11 +2360,24 @@ const Game = {
     document.getElementById('startBtn').addEventListener('click', () => this.start());
     document.getElementById('resumeBtn').addEventListener('click', () => this.togglePause());
     document.getElementById('retryBtn').addEventListener('click', () => this.start());
+    const savedDifficulty = localStorage.getItem(DIFFICULTY_KEY);
+    this.setDifficulty(DIFFICULTY_PRESETS[savedDifficulty] ? savedDifficulty : 'normal');
+    difficultyButtons.forEach((btn) => {
+      btn.addEventListener('click', () => this.setDifficulty(btn.dataset.difficulty));
+    });
     if (DEBUG) {
       document.getElementById('debugTag').classList.remove('hidden');
       console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Ring/Snake, 0 = reset boss tiers');
     }
     requestAnimationFrame((t) => this.loop(t));
+  },
+
+  setDifficulty(difficulty) {
+    this.difficulty = difficulty;
+    localStorage.setItem(DIFFICULTY_KEY, difficulty);
+    difficultyButtons.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.difficulty === difficulty);
+    });
   },
 
   start() {
@@ -2484,7 +2529,7 @@ const Game = {
   },
 
   addScore(v) {
-    this.score += v;
+    this.score += Math.round(v * DIFFICULTY_PRESETS[this.difficulty].scoreMult);
     this.updateHud();
   },
 
@@ -2632,10 +2677,11 @@ const Game = {
     this.state = 'gameover';
     Audio_.gameOver();
     Music.fadeOut(1.5);
-    const high = Math.max(this.score, Number(localStorage.getItem(HIGH_SCORE_KEY) || 0));
-    localStorage.setItem(HIGH_SCORE_KEY, String(high));
+    const key = HIGH_SCORE_KEYS[this.difficulty];
+    const high = Math.max(this.score, Number(localStorage.getItem(key) || 0));
+    localStorage.setItem(key, String(high));
     finalScoreEl.textContent = `FINAL SCORE ${String(this.score).padStart(6, '0')}`;
-    highScoreEl.textContent = `BEST ${String(high).padStart(6, '0')}`;
+    highScoreEl.textContent = `BEST (${DIFFICULTY_PRESETS[this.difficulty].label}) ${String(high).padStart(6, '0')}`;
     gameOverOverlay.classList.remove('hidden');
   },
 

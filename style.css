@@ -614,6 +614,38 @@ canvas#game {
 .key.wide { min-width: 60px; letter-spacing: 2px; }
 .or { opacity: 0.6; font-family: 'Orbitron', sans-serif; }
 
+.difficulty-select {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.diff-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 8px 12px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #2a1c4a, #150a2e);
+  border: 1px solid rgba(46, 242, 255, 0.3);
+  color: #d9cdfa;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.diff-btn:hover {
+  border-color: rgba(46, 242, 255, 0.6);
+  color: #fff;
+}
+
+.diff-btn.active {
+  background: linear-gradient(180deg, var(--cyan), #1aa8c9);
+  border-color: var(--cyan);
+  color: #06030f;
+  box-shadow: 0 0 10px rgba(46, 242, 255, 0.5);
+}
+
 .press-start {
   margin-top: 8px;
   font-family: 'Press Start 2P', monospace;
