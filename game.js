@@ -877,19 +877,30 @@ const ENEMY_TYPES = {
   interceptor: { w: 28, h: 18, hp: 1, speed: [220, 280], score: 150, color: '#7b2eff' },
   cruiser: { w: 46, h: 30, hp: 3, speed: [80, 120], score: 300, color: '#ff9d2e' },
   sentry: { w: 30, h: 22, hp: 1, speed: [140, 190], score: 200, color: '#4fc3f7' },
+  turret: { w: 34, h: 26, hp: 4, speed: [35, 55], score: 350, color: '#ff6b4a' },
+  swarmer: { w: 18, h: 12, hp: 1, speed: [210, 210], score: 70, color: '#c8ff2e' },
 };
 const SHIELD_COLOR = '#6ecbff';
 
+// Individual enemy stats step up every 12 waves (HP on the ranged types, speed
+// on everything) so late waves are individually tougher, not just more numerous.
+function waveTier(wave) { return Math.min(Math.floor(wave / 15), 8); }
+
 class Enemy {
-  constructor(type) {
+  constructor(type, wave = 1, fixedY) {
     const spec = ENEMY_TYPES[type];
     this.type = type;
     this.spec = spec;
     this.w = spec.w; this.h = spec.h;
     this.x = W + rand(10, 80);
-    this.y = rand(Background.horizonY * 0.05, Background.horizonY - spec.h - 10);
-    this.speed = rand(spec.speed[0], spec.speed[1]);
-    this.hp = spec.hp;
+    const yMin = Background.horizonY * 0.05, yMax = Background.horizonY - spec.h - 10;
+    this.y = fixedY !== undefined ? clamp(fixedY, yMin, yMax) : rand(yMin, yMax);
+    const tier = waveTier(wave);
+    const hpGrowth = (type === 'cruiser' || type === 'turret') ? tier : Math.floor(tier / 2);
+    this.hp = spec.hp + hpGrowth;
+    const speedMult = 1 + tier * 0.05;
+    this.speed = rand(spec.speed[0], spec.speed[1]) * speedMult;
+    this.scoreValue = Math.round(spec.score * (1 + tier * 0.12));
     this.t = rand(0, Math.PI * 2);
     this.baseY = this.y;
     this.fireTimer = rand(0.6, 1.6);
@@ -913,6 +924,19 @@ class Enemy {
         const d = Math.hypot(dx, dy) || 1;
         const spd = 260;
         Bullets.spawnEnemy(this.x, this.y + this.h / 2 - 4, (dx / d) * spd, (dy / d) * spd);
+      }
+    }
+    if (this.type === 'turret') {
+      this.fireTimer -= dt;
+      if (this.fireTimer <= 0 && this.x < W - 20) {
+        this.fireTimer = rand(1.6, 2.2);
+        const dx = player.x - this.x, dy = (player.y + player.h / 2) - (this.y + this.h / 2);
+        const baseAngle = Math.atan2(dy, dx);
+        const spreadCount = 3, spreadArc = 0.4, spd = 220;
+        for (let i = 0; i < spreadCount; i++) {
+          const a = baseAngle + (i - (spreadCount - 1) / 2) * (spreadArc / (spreadCount - 1));
+          Bullets.spawnEnemy(this.x, this.y + this.h / 2 - 4, Math.cos(a) * spd, Math.sin(a) * spd);
+        }
       }
     }
     if (this.type === 'sentry') {
@@ -949,6 +973,16 @@ class Enemy {
       ctx.lineTo(-this.w / 2, 0);
       ctx.lineTo(-this.w / 2 + 10, this.h / 2);
       ctx.lineTo(this.w / 2 - 14, this.h / 2);
+    } else if (this.type === 'turret') {
+      ctx.moveTo(this.w / 2, 0);
+      ctx.lineTo(0, -this.h / 2);
+      ctx.lineTo(-this.w / 2, -this.h / 2 + 5);
+      ctx.lineTo(-this.w / 2, this.h / 2 - 5);
+      ctx.lineTo(0, this.h / 2);
+    } else if (this.type === 'swarmer') {
+      ctx.moveTo(this.w / 2, 0);
+      ctx.lineTo(-this.w / 2, -this.h / 2);
+      ctx.lineTo(-this.w / 2, this.h / 2);
     } else {
       ctx.moveTo(this.w / 2, 0);
       ctx.lineTo(-this.w / 2, -this.h / 2);
@@ -977,26 +1011,113 @@ class Enemy {
   }
 }
 
+// Deterministic per-wave roster: every player faces the same enemy count and
+// type mix on a given wave number, so score/wave outcomes stay comparable
+// for the leaderboard. Spawn position/speed/timing can still vary cosmetically.
+const TURRET_UNLOCK_WAVE = 8;
+const SWARMER_UNLOCK_WAVE = 14;
+
+function buildWaveRoster(wave) {
+  const count = clamp(6 + Math.floor(wave * 1.6), 6, 50);
+  // Cadences shrink as wave climbs, so a growing share of the roster is a
+  // ranged threat (cruiser/turret) or shield-blocker (sentry) instead of filler.
+  const shooterEvery = Math.max(3, 9 - Math.floor(wave / 12));
+  const sentryEvery = Math.max(5, 11 - Math.floor(wave / 14));
+
+  const roster = [];
+  for (let i = 1; i <= count; i++) {
+    let type = 'drone';
+    if (wave >= 2 && i % 4 === 0) type = 'interceptor';
+    if (wave >= 5 && i % sentryEvery === 0) type = 'sentry';
+    if (wave >= 3 && i % shooterEvery === 0) type = 'cruiser';
+    if (wave >= TURRET_UNLOCK_WAVE && i % shooterEvery === Math.floor(shooterEvery / 2)) type = 'turret';
+    roster.push(type);
+  }
+
+  // Swarmer squads: clustered bursts of weak, fast enemies inserted as a group
+  // so they arrive together and read as a wall of targets, not lone stragglers.
+  if (wave >= SWARMER_UNLOCK_WAVE) {
+    const squadCount = 1 + Math.floor((wave - SWARMER_UNLOCK_WAVE) / 15);
+    for (let s = 0; s < squadCount; s++) {
+      const insertAt = Math.floor(roster.length * ((s + 1) / (squadCount + 1)));
+      roster.splice(insertAt, 0, 'swarmer', 'swarmer', 'swarmer', 'swarmer');
+    }
+  }
+  return roster;
+}
+
 const Enemies = {
   list: [],
+  roster: [],
+  spawnIndex: 0,
   spawnTimer: 0,
   spawnEvery: 1.1,
+  escapedInWave: 0,
+
+  startWave(wave) {
+    this.roster = buildWaveRoster(wave);
+    this.spawnIndex = 0;
+    this.spawnTimer = 0.6;
+    this.escapedInWave = 0;
+  },
+
+  get waveCleared() {
+    return this.spawnIndex >= this.roster.length && this.list.length === 0;
+  },
+
+  countAlive(type) {
+    let n = 0;
+    for (const e of this.list) if (e.type === type) n++;
+    return n;
+  },
+
+  // How many of this type may be alive at once. Turret and cruiser both
+  // linger on screen a long time (slow + tanky), so without a cap their
+  // numbers compound as more spawn in before the earlier ones clear out.
+  concurrencyCap(type) {
+    if (type === 'turret') return 2;
+    if (type === 'cruiser') return 3;
+    return Infinity;
+  },
+
   update(dt, player, wave, throttle) {
-    this.spawnTimer -= dt;
-    if (this.spawnTimer <= 0) {
-      this.spawnTimer = clamp(this.spawnEvery - wave * 0.05, 0.35, 2) * (throttle ? 2.2 : 1);
-      const roll = Math.random();
-      let type = 'drone';
-      if (wave >= 2 && roll > 0.55) type = 'interceptor';
-      if (wave >= 3 && roll > 0.82) type = 'cruiser';
-      if (wave >= 5 && roll > 0.9) type = 'sentry';
-      this.list.push(new Enemy(type));
+    if (this.spawnIndex < this.roster.length) {
+      this.spawnTimer -= dt;
+      if (this.spawnTimer <= 0) {
+        const type = this.roster[this.spawnIndex];
+        if (this.countAlive(type) >= this.concurrencyCap(type)) {
+          this.spawnTimer = 0.4;
+        } else {
+          this.spawnTimer = clamp(this.spawnEvery - wave * 0.022, 0.35, 1.6) * (throttle ? 2.2 : 1);
+          if (type === 'swarmer') {
+            let clusterSize = 0;
+            while (this.roster[this.spawnIndex + clusterSize] === 'swarmer') clusterSize++;
+            const baseY = rand(Background.horizonY * 0.15, Background.horizonY - 80);
+            const mid = (clusterSize - 1) / 2;
+            for (let i = 0; i < clusterSize; i++) {
+              this.list.push(new Enemy('swarmer', wave, baseY + (i - mid) * 28));
+            }
+            this.spawnIndex += clusterSize;
+          } else {
+            this.list.push(new Enemy(type, wave));
+            this.spawnIndex++;
+          }
+        }
+      }
     }
     this.list.forEach((e) => e.update(dt, player));
+    const before = this.list.length;
     this.list = this.list.filter((e) => e.x > -80);
+    this.escapedInWave += before - this.list.length;
   },
   draw() { this.list.forEach((e) => e.draw()); },
-  clear() { this.list = []; this.spawnTimer = 0; }
+  clear() {
+    this.list = [];
+    this.roster = [];
+    this.spawnIndex = 0;
+    this.spawnTimer = 0;
+    this.escapedInWave = 0;
+  }
 };
 
 /* ============================== BOSSES ============================== */
@@ -1825,6 +1946,7 @@ const Game = {
     this.player = new Player();
     Bullets.clear();
     Enemies.clear();
+    Enemies.startWave(this.wave);
     Particles.clear();
     PowerUps.clear();
     this.boss = null;
@@ -1863,7 +1985,7 @@ const Game = {
   detonateBomb() {
     Enemies.list.forEach((e) => {
       Particles.burst(e.x + e.w / 2, e.y + e.h / 2, e.spec.color, 16, 200);
-      this.addScore(e.spec.score);
+      this.addScore(e.scoreValue);
     });
     Enemies.list = [];
     Bullets.enemy = [];
@@ -1902,9 +2024,23 @@ const Game = {
 
   addScore(v) {
     this.score += v;
-    const newWave = 1 + Math.floor(this.score / 1200);
-    if (newWave !== this.wave) { this.wave = newWave; Audio_.wave(); }
     this.updateHud();
+  },
+
+  completeWave() {
+    const advanceBonus = 50 + this.wave * 10;
+    const perfect = Enemies.escapedInWave === 0;
+    const perfectBonus = perfect ? 250 + this.wave * 30 : 0;
+    this.addScore(advanceBonus + perfectBonus);
+    if (perfect) {
+      this.showToast(`WAVE ${this.wave} — PERFECT CLEAR +${advanceBonus + perfectBonus}`, '#5CFFB0');
+    } else {
+      this.showToast(`WAVE ${this.wave} CLEAR +${advanceBonus}`, '#8fd7ff');
+    }
+    Audio_.wave();
+    this.wave += 1;
+    this.updateHud();
+    Enemies.startWave(this.wave);
   },
 
   showToast(text, color) {
@@ -2023,6 +2159,10 @@ const Game = {
     PowerUps.update(dt);
     Particles.update(dt);
 
+    if (!this.boss && Enemies.waveCleared) {
+      this.completeWave();
+    }
+
     const bossMilestone = Math.floor(this.wave / 15) * 15;
     if (bossMilestone > 0 && bossMilestone !== this.lastBossWave && !this.boss) {
       this.lastBossWave = bossMilestone;
@@ -2044,7 +2184,7 @@ const Game = {
           b._dead = true;
           if (e.takeHit()) {
             e.hp = 0;
-            this.addScore(e.spec.score);
+            this.addScore(e.scoreValue);
             Audio_.explosion();
             Particles.burst(e.x + e.w / 2, e.y + e.h / 2, e.spec.color, 18, 200);
           }
