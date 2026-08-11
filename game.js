@@ -35,6 +35,15 @@ function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function rectsOverlap(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
+// Shortest distance from point (px,py) to line segment (x1,y1)-(x2,y2) — used
+// for angled-beam hit detection, where the hazard isn't an axis-aligned box.
+function pointSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq > 0 ? clamp(((px - x1) * dx + (py - y1) * dy) / lenSq, 0, 1) : 0;
+  const cx = x1 + t * dx, cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
 function hexToRgb(hex) {
   const n = parseInt(hex.replace('#', ''), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -142,6 +151,32 @@ const Audio_ = {
     [420, 620].forEach((f, i) => {
       setTimeout(() => this.tone(f, 0.16, 'sawtooth', 0.06, f * 1.4), i * 60);
     });
+  },
+  laserBeam() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    // Main body: a harsh, fairly slow descending sweep — the core "laser" character.
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(2000, t0);
+    osc.frequency.exponentialRampToValueAtTime(160, t0 + 0.45);
+    gain.gain.setValueAtTime(0.12, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.5);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.5);
+    // Thin high overtone on top for the "zap" bite at the start of the shot.
+    const osc2 = this.ctx.createOscillator();
+    const gain2 = this.ctx.createGain();
+    osc2.type = 'square';
+    osc2.frequency.setValueAtTime(3400, t0);
+    osc2.frequency.exponentialRampToValueAtTime(600, t0 + 0.28);
+    gain2.gain.setValueAtTime(0.05, t0);
+    gain2.gain.exponentialRampToValueAtTime(0.001, t0 + 0.28);
+    osc2.connect(gain2).connect(this.ctx.destination);
+    osc2.start(t0);
+    osc2.stop(t0 + 0.28);
   }
 };
 
@@ -530,6 +565,17 @@ const Particles = {
   trail(x, y, color) {
     this.list.push(new Particle(x, y, rand(-20, 10), rand(-10, 10), rand(0.2, 0.35), color, rand(2, 4)));
   },
+  // Spawns particles on a ring around (x,y) moving inward — the opposite of
+  // burst() — for "gathering energy" charge-up effects.
+  converge(x, y, color, count, speed, radius = 60) {
+    for (let i = 0; i < count; i++) {
+      const ang = rand(0, Math.PI * 2);
+      const r = rand(radius * 0.6, radius);
+      const px = x + Math.cos(ang) * r, py = y + Math.sin(ang) * r;
+      const spd = rand(speed * 0.7, speed);
+      this.list.push(new Particle(px, py, -Math.cos(ang) * spd, -Math.sin(ang) * spd, rand(0.25, 0.45), color, rand(2, 4)));
+    }
+  },
   update(dt) {
     this.list.forEach((p) => p.update(dt));
     this.list = this.list.filter((p) => p.life > 0);
@@ -876,7 +922,7 @@ const ENEMY_TYPES = {
   drone: { w: 30, h: 20, hp: 1, speed: [160, 220], score: 100, color: '#ff2ee0' },
   interceptor: { w: 28, h: 18, hp: 1, speed: [220, 280], score: 150, color: '#7b2eff' },
   cruiser: { w: 46, h: 30, hp: 3, speed: [80, 120], score: 300, color: '#ff9d2e' },
-  sentry: { w: 30, h: 22, hp: 1, speed: [140, 190], score: 200, color: '#4fc3f7' },
+  sentry: { w: 30, h: 22, hp: 2, speed: [140, 190], score: 200, color: '#4fc3f7' },
   turret: { w: 34, h: 26, hp: 4, speed: [35, 55], score: 350, color: '#ff6b4a' },
   swarmer: { w: 18, h: 12, hp: 1, speed: [210, 210], score: 70, color: '#c8ff2e' },
 };
@@ -907,7 +953,9 @@ class Enemy {
     this.hitFlash = 0;
     if (type === 'sentry') {
       this.shieldAngle = rand(0, Math.PI * 2);
-      this.shieldArc = Math.PI;
+      // Wide blocked arc, narrow rotating gap — forces timing a shot through
+      // the gap rather than just spraying into a 50/50 rotating half-shield.
+      this.shieldArc = Math.PI * 1.55;
     }
   }
   update(dt, player) {
@@ -1257,6 +1305,25 @@ class MiniBoss {
     const escortCount = clamp(appearanceIndex - 1, 0, 4);
     this.escorts = [];
     for (let i = 0; i < escortCount; i++) this.escorts.push(new BossEscort(this, i));
+
+    // Charge/beam cycle: forces a recurring invulnerable window regardless of
+    // how much damage the player can burst in, so the fight can't be melted
+    // in one continuous DPS window. Charge triggers on whichever comes first:
+    // a chunk of HP lost since the last charge, or a flat time cap.
+    this.phase = 'active';
+    this.damageSinceCharge = 0;
+    this.chargeHpThreshold = this.maxHp * 0.25;
+    this.activeTimer = 0;
+    this.activeTimeCap = rand(6, 8);
+    this.chargeDuration = 2.2;
+    this.chargeTimer = 0;
+    this.beamLockAt = this.chargeDuration - 0.9;
+    this.beamLockPoint = null;
+    this.beamThickness = 46;
+    this.beamDuration = 0.6;
+    this.beamTimer = 0;
+    this.beamHasHit = false;
+    this.convergeTimer = 0;
   }
   update(dt, player) {
     this.t += dt;
@@ -1264,17 +1331,60 @@ class MiniBoss {
       this.x -= this.enterSpeed * dt;
       if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; this.t = 0; }
     } else {
-      this.x = this.targetX + Math.sin(this.t * 0.5) * 50;
-      const dy = this.targetY - this.y;
-      if (Math.abs(dy) < 12) {
-        this.targetY = rand(this.skyTopY, this.skyBottomY);
-      } else {
-        this.y += Math.sign(dy) * Math.min(Math.abs(dy), this.ySpeed * dt);
-      }
-      this.fireTimer -= dt;
-      if (this.fireTimer <= 0) {
-        this.fireTimer = rand(0.55, 0.9);
-        this.fire(player);
+      if (this.phase === 'active') {
+        this.x = this.targetX + Math.sin(this.t * 0.5) * 50;
+        const dy = this.targetY - this.y;
+        if (Math.abs(dy) < 12) {
+          this.targetY = rand(this.skyTopY, this.skyBottomY);
+        } else {
+          this.y += Math.sign(dy) * Math.min(Math.abs(dy), this.ySpeed * dt);
+        }
+        this.fireTimer -= dt;
+        if (this.fireTimer <= 0) {
+          this.fireTimer = rand(0.55, 0.9);
+          this.fire(player);
+        }
+        this.activeTimer += dt;
+        if (this.damageSinceCharge >= this.chargeHpThreshold || this.activeTimer >= this.activeTimeCap) {
+          this.phase = 'charging';
+          this.chargeTimer = 0;
+          this.beamLockPoint = null;
+        }
+      } else if (this.phase === 'charging') {
+        this.chargeTimer += dt;
+        const chargeFrac = clamp(this.chargeTimer / this.chargeDuration, 0, 1);
+        this.convergeTimer -= dt;
+        if (this.convergeTimer <= 0) {
+          this.convergeTimer = 0.045;
+          const cx = this.x + this.w / 2, cy = this.y + this.h / 2;
+          const col = rgbaStr(lerpColor('#ffe66a', '#ffffff', chargeFrac));
+          Particles.converge(cx, cy, col, 2, 150 + chargeFrac * 90, 55);
+        }
+        if (this.beamLockPoint === null && this.chargeTimer >= this.beamLockAt) {
+          this.beamLockPoint = {
+            x: player.x + player.w / 2,
+            y: clamp(player.y + player.h / 2, this.skyTopY + 10, this.skyBottomY + this.h - 10),
+          };
+        }
+        if (this.chargeTimer >= this.chargeDuration) {
+          this.phase = 'beam';
+          this.beamTimer = 0;
+          this.beamHasHit = false;
+          const noseX = this.x + 4, noseY = this.y + this.h / 2;
+          Particles.burst(noseX, noseY, '#ffffff', 26, 260);
+          Particles.burst(noseX, noseY, '#ff5050', 18, 200);
+          Game.shake(0.25, 7);
+          Audio_.laserBeam();
+        }
+      } else if (this.phase === 'beam') {
+        this.beamTimer += dt;
+        if (this.beamTimer >= this.beamDuration) {
+          this.phase = 'active';
+          this.damageSinceCharge = 0;
+          this.activeTimer = 0;
+          this.activeTimeCap = rand(6, 8);
+          this.beamLockPoint = null;
+        }
       }
     }
     if (this.hitFlash > 0) this.hitFlash -= dt;
@@ -1293,13 +1403,36 @@ class MiniBoss {
   onSegmentDestroyed(segment) {
     if (segment !== this) this.escorts = this.escorts.filter((e) => e !== segment);
   }
+  beamActive() { return this.phase === 'beam'; }
+  // Straight line from the ship's nose through the locked target point,
+  // extended to the left screen edge. Used for both the charging telegraph
+  // and the actual beam (rendering + hit test) so they always match exactly.
+  beamRay() {
+    if (!this.beamLockPoint) return null;
+    const x1 = this.x + 4, y1 = this.y + this.h / 2;
+    let dx = this.beamLockPoint.x - x1;
+    const dy = this.beamLockPoint.y - y1;
+    if (dx >= -1) dx = -1;
+    const s = -x1 / dx;
+    return { x1, y1, x2: 0, y2: y1 + s * dy };
+  }
   applyBombDamage(amount) {
+    if (this.phase !== 'active') {
+      Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#ffffff', 14, 160);
+      return;
+    }
     this.hp -= amount;
+    this.damageSinceCharge += amount;
     this.hitFlash = 0.15;
     Particles.burst(this.x + this.w / 2, this.y + this.h / 2, this.color, 24, 240);
   }
   takeHit() {
+    if (this.phase !== 'active') {
+      Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#ffffff', 4, 90);
+      return false;
+    }
     this.hp -= 1;
+    this.damageSinceCharge += 1;
     this.hitFlash = 0.08;
     Audio_.hitEnemy();
     Particles.burst(this.x + this.w / 2, this.y + this.h / 2, BOSS_COLOR, 5, 140);
@@ -1332,15 +1465,101 @@ class MiniBoss {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    const chargeFrac = this.phase === 'charging' ? clamp(this.chargeTimer / this.chargeDuration, 0, 1) : 0;
+    const coreR = this.phase === 'charging'
+      ? 8 + chargeFrac * 18
+      : 8 + 2 * Math.sin(this.t * 6);
+    const coreColor = chargeFrac > 0 ? rgbaStr(lerpColor('#ffe66a', '#ffffff', chargeFrac)) : '#ffe66a';
     ctx.beginPath();
-    ctx.arc(0, 0, 8 + 2 * Math.sin(this.t * 6), 0, Math.PI * 2);
-    ctx.fillStyle = '#ffe66a';
-    ctx.shadowColor = '#ffe66a';
+    ctx.arc(0, 0, coreR, 0, Math.PI * 2);
+    ctx.fillStyle = coreColor;
+    ctx.shadowColor = coreColor;
     ctx.shadowBlur = 14;
     ctx.fill();
 
+    if (this.phase !== 'active') {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.w / 2 + 8 + 3 * Math.sin(this.t * 10), 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 16;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+
+    if (this.phase === 'charging') {
+      // Two containment rings spinning opposite directions, tightening
+      // (moving closer to the hull) as the charge nears completion.
+      const ringR = this.w / 2 + 20 - chargeFrac * 10;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = coreColor;
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = 'rgba(255, 230, 140, 0.85)';
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, this.t * 4, this.t * 4 + Math.PI * 1.1);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR + 7, -this.t * 3.2, -this.t * 3.2 + Math.PI * 1.1);
+      ctx.stroke();
+    }
+
     ctx.restore();
     ctx.shadowBlur = 0;
+
+    if (this.phase === 'charging' && this.beamLockPoint !== null) {
+      const ray = this.beamRay();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,80,80,0.85)';
+      ctx.shadowColor = '#ff5050';
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(ray.x1, ray.y1);
+      ctx.lineTo(ray.x2, ray.y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    if (this.phase === 'beam') {
+      const ray = this.beamRay();
+      const angle = Math.atan2(ray.y2 - ray.y1, ray.x2 - ray.x1);
+      const length = Math.hypot(ray.x2 - ray.x1, ray.y2 - ray.y1);
+      const th = this.beamThickness;
+      ctx.save();
+      ctx.translate(ray.x1, ray.y1);
+      ctx.rotate(angle);
+      // Layered laser: soft outer glow, saturated mid band, white-hot core line.
+      const outerGrad = ctx.createLinearGradient(0, -th / 2, 0, th / 2);
+      outerGrad.addColorStop(0, 'rgba(255,90,90,0)');
+      outerGrad.addColorStop(0.5, 'rgba(255,60,60,0.55)');
+      outerGrad.addColorStop(1, 'rgba(255,90,90,0)');
+      ctx.fillStyle = outerGrad;
+      ctx.shadowColor = '#ff3030';
+      ctx.shadowBlur = 30;
+      ctx.fillRect(0, -th / 2, length, th);
+
+      const midH = th * 0.55;
+      const midGrad = ctx.createLinearGradient(0, -midH / 2, 0, midH / 2);
+      midGrad.addColorStop(0, 'rgba(255,120,60,0)');
+      midGrad.addColorStop(0.5, 'rgba(255,150,60,0.95)');
+      midGrad.addColorStop(1, 'rgba(255,120,60,0)');
+      ctx.fillStyle = midGrad;
+      ctx.shadowBlur = 18;
+      ctx.fillRect(0, -midH / 2, length, midH);
+
+      ctx.strokeStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 16;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(length, 0);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 }
 
@@ -2163,7 +2382,7 @@ const Game = {
       this.completeWave();
     }
 
-    const bossMilestone = Math.floor(this.wave / 15) * 15;
+    const bossMilestone = Math.floor(this.wave / 10) * 10;
     if (bossMilestone > 0 && bossMilestone !== this.lastBossWave && !this.boss) {
       this.lastBossWave = bossMilestone;
       this.spawnBoss();
@@ -2259,6 +2478,20 @@ const Game = {
           this.updateHud();
           if (this.player.lives <= 0) { this.gameOver(); return; }
           break;
+        }
+      }
+      if (this.boss.beamActive && this.boss.beamActive() && !this.boss.beamHasHit) {
+        const ray = this.boss.beamRay();
+        if (ray) {
+          const pc = { x: this.player.x + this.player.w / 2, y: this.player.y + this.player.h / 2 };
+          const dist = pointSegmentDistance(pc.x, pc.y, ray.x1, ray.y1, ray.x2, ray.y2);
+          const hitRadius = this.boss.beamThickness / 2 + Math.min(this.player.w, this.player.h) / 2;
+          if (dist <= hitRadius) {
+            this.boss.beamHasHit = true;
+            this.player.hit();
+            this.updateHud();
+            if (this.player.lives <= 0) { this.gameOver(); return; }
+          }
         }
       }
     }
