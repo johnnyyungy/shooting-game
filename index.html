@@ -69,12 +69,16 @@
           </div>
         </div>
         <div class="hud-bottom-group shield-bar-wrap hidden" id="shieldBarWrap">
-          <div class="hud-label shield-label">SHIELD</div>
+          <div class="hud-label shield-label" id="shieldLabel">SHIELD</div>
           <div class="shield-bar">
             <div class="shield-bar-fill" id="shieldBarFill"></div>
           </div>
         </div>
         <div class="hud-bottom-group wingman-mode-label hidden" id="wingmanModeLabel">WINGMEN: FORWARD</div>
+        <div class="hud-bottom-group weapons-wrap hidden" id="weaponsWrap">
+          <div class="hud-label weapons-label">ARSENAL</div>
+          <div class="weapons" id="weapons"></div>
+        </div>
       </div>
 
       <!-- overlays -->
@@ -84,6 +88,7 @@
         <div class="instructions">
           <div class="key-row"><span class="key">▲</span><span class="key">▼</span><span class="key">◀</span><span class="key">▶</span><span class="or">/</span><span class="key wide">W A S D</span> — maneuver</div>
           <div class="key-row"><span class="key wide">SPACE</span> — fire cannon</div>
+          <div class="key-row"><span class="key wide">E</span> — cycle weapon</div>
           <div class="key-row"><span class="key wide">Q</span> — cycle wingman mode</div>
           <div class="key-row"><span class="key wide">B</span> — bomb</div>
           <div class="key-row"><span class="key wide">P</span> — pause</div>

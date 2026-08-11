@@ -358,6 +358,63 @@ canvas#game {
   transition: width 0.2s ease;
 }
 
+.weapons-wrap.hidden {
+  display: none;
+}
+
+.weapons-label {
+  color: var(--cyan);
+}
+
+.weapons {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.weapon-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  opacity: 0.5;
+}
+
+.weapon-icon.active {
+  opacity: 1;
+  border-color: var(--wcolor, #fff);
+  box-shadow: 0 0 8px var(--wcolor, #fff);
+}
+
+.weapon-glyph {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  color: var(--wcolor, #fff);
+  text-shadow: 0 0 6px var(--wcolor, #fff);
+}
+
+.weapon-pips {
+  display: flex;
+  gap: 2px;
+}
+
+.weapon-pip {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.weapon-pip.filled {
+  background: var(--wcolor, #fff);
+  box-shadow: 0 0 4px var(--wcolor, #fff);
+  border-color: var(--wcolor, #fff);
+}
+
 .boss-bar-wrap {
   position: absolute;
   top: 42px;

@@ -21,6 +21,9 @@ const highScoreEl = document.getElementById('highScore');
 const powerupToastEl = document.getElementById('powerupToast');
 const shieldBarWrapEl = document.getElementById('shieldBarWrap');
 const shieldBarFillEl = document.getElementById('shieldBarFill');
+const shieldLabelEl = document.getElementById('shieldLabel');
+const weaponsWrapEl = document.getElementById('weaponsWrap');
+const weaponsEl = document.getElementById('weapons');
 const bossBarWrapEl = document.getElementById('bossBarWrap');
 const bossBarLabelEl = document.getElementById('bossBarLabel');
 const bossBarFillEl = document.getElementById('bossBarFill');
@@ -308,6 +311,7 @@ const Input = {
       }
       if (code === 'KeyP' || code === 'Escape') Game.togglePause();
       if (code === 'KeyQ' && Game.state === 'playing' && Game.player) Game.player.cycleWingmanMode();
+      if (code === 'KeyE' && Game.state === 'playing' && Game.player) Game.player.cycleWeapon();
       if (code === 'KeyB' && Game.state === 'playing' && Game.player) Game.player.useBomb();
       if (DEBUG && Game.state === 'playing') {
         if (code === 'Digit1') Game.spawnBossOfType('sentinel');
@@ -584,6 +588,57 @@ const Particles = {
   clear() { this.list = []; }
 };
 
+// Brief jagged lightning-bolt lines connecting two points — used to make the
+// Chain weapon's jump between enemies actually visible, since particle
+// bursts alone don't read as "this hit jumped from A to B."
+const Bolts = {
+  list: [],
+  spawn(x1, y1, x2, y2, color) {
+    const segments = 4;
+    const points = [{ x: x1, y: y1 }];
+    const dx = x2 - x1, dy = y2 - y1;
+    const perpX = -dy, perpY = dx;
+    const perpLen = Math.hypot(perpX, perpY) || 1;
+    for (let i = 1; i < segments; i++) {
+      const t = i / segments;
+      const offset = rand(-10, 10);
+      points.push({
+        x: x1 + dx * t + (perpX / perpLen) * offset,
+        y: y1 + dy * t + (perpY / perpLen) * offset,
+      });
+    }
+    points.push({ x: x2, y: y2 });
+    this.list.push({ points, color, life: 0.3, maxLife: 0.3 });
+  },
+  update(dt) {
+    this.list.forEach((b) => { b.life -= dt; });
+    this.list = this.list.filter((b) => b.life > 0);
+  },
+  draw() {
+    this.list.forEach((b) => {
+      const a = clamp(b.life / b.maxLife, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      b.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+      // Wide colored glow pass, then a bright white core on top — reads as a
+      // much punchier bolt than a single thin stroke.
+      ctx.strokeStyle = b.color;
+      ctx.shadowColor = b.color;
+      ctx.shadowBlur = 20;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    });
+  },
+  clear() { this.list = []; }
+};
+
 /* ============================== PLAYER ============================== */
 
 class Player {
@@ -599,9 +654,12 @@ class Player {
     this.fireCooldown = 0;
     this.thrusterT = 0;
     this.tilt = 0;
-    this.weapon = 'normal';
+    this.weapons = {};
+    this.weaponOrder = ['normal'];
+    this.activeWeapon = 'normal';
     this.shieldHp = 0;
-    this.shieldMaxHp = 3;
+    this.shieldLevel = 1;
+    this.shieldMaxHp = SHIELD_BASE_MAX;
     this.shieldAnimT = 0;
     this.wingmen = 0;
     this.wingmanFireCooldown = 0;
@@ -639,15 +697,33 @@ class Player {
 
     if (Input.firePressed && this.fireCooldown <= 0) {
       const gx = this.x + this.w - 6, gy = this.y + this.h / 2 - 2;
-      if (this.weapon === 'spread') {
-        this.fireCooldown = 0.17;
-        Bullets.spawnPlayer(gx, gy, -0.22);
-        Bullets.spawnPlayer(gx, gy, 0);
-        Bullets.spawnPlayer(gx, gy, 0.22);
-      } else if (this.weapon === 'rapid') {
-        this.fireCooldown = 0.09;
-        Bullets.spawnPlayer(gx, gy - 6);
-        Bullets.spawnPlayer(gx, gy + 6);
+      const level = this.weapons[this.activeWeapon] ? this.weapons[this.activeWeapon].level : 1;
+      if (this.activeWeapon === 'spread') {
+        const cfg = WEAPON_LEVELS.spread[level - 1];
+        this.fireCooldown = cfg.cooldown;
+        const step = cfg.count > 1 ? cfg.arc / (cfg.count - 1) : 0;
+        for (let i = 0; i < cfg.count; i++) {
+          Bullets.spawnPlayer(gx, gy, -cfg.arc / 2 + i * step, null, null, level);
+        }
+      } else if (this.activeWeapon === 'rapid') {
+        const cfg = WEAPON_LEVELS.rapid[level - 1];
+        this.fireCooldown = cfg.cooldown;
+        if (cfg.streams >= 3) {
+          Bullets.spawnPlayer(gx, gy - 8, 0, null, null, level);
+          Bullets.spawnPlayer(gx, gy, 0, null, null, level);
+          Bullets.spawnPlayer(gx, gy + 8, 0, null, null, level);
+        } else {
+          Bullets.spawnPlayer(gx, gy - 6, 0, null, null, level);
+          Bullets.spawnPlayer(gx, gy + 6, 0, null, null, level);
+        }
+      } else if (this.activeWeapon === 'pierce') {
+        const cfg = WEAPON_LEVELS.pierce[level - 1];
+        this.fireCooldown = cfg.cooldown;
+        Bullets.spawnPlayer(gx, gy, 0, '#8aff2e', '#5cff00', level, { pierce: cfg.pierceCount });
+      } else if (this.activeWeapon === 'chain') {
+        const cfg = WEAPON_LEVELS.chain[level - 1];
+        this.fireCooldown = cfg.cooldown;
+        Bullets.spawnPlayer(gx, gy, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius });
       } else {
         this.fireCooldown = 0.14;
         Bullets.spawnPlayer(gx, gy);
@@ -696,7 +772,9 @@ class Player {
       Particles.burst(this.x + this.w / 2, this.y + this.h / 2, '#ff2ee0', 14, 180);
     } else {
       Audio_.lifeLost();
-      this.weapon = 'normal';
+      this.weapons = {};
+      this.weaponOrder = ['normal'];
+      this.activeWeapon = 'normal';
       this.lives -= 1;
       this.invulnTime = 2.5;
       Game.shake(0.35, 9);
@@ -810,6 +888,16 @@ class Player {
     Audio_.powerup();
     Game.updateHud();
   }
+  cycleWeapon() {
+    if (this.weaponOrder.length <= 1) return;
+    const i = this.weaponOrder.indexOf(this.activeWeapon);
+    this.activeWeapon = this.weaponOrder[(i + 1) % this.weaponOrder.length];
+    const label = this.activeWeapon === 'normal' ? 'STANDARD CANNON' : POWERUP_TYPES[this.activeWeapon].name;
+    const held = this.weapons[this.activeWeapon];
+    Game.showToast(`WEAPON: ${label}${held ? ` LV${held.level}` : ''}`, '#eafcff');
+    Audio_.powerup();
+    Game.updateHud();
+  }
   useBomb() {
     if (this.bombs <= 0 || this.bombCooldown > 0) return;
     this.bombs -= 1;
@@ -841,38 +929,93 @@ class Player {
 /* ============================== BULLETS ============================== */
 
 class PlayerBullet {
-  constructor(x, y, angle, color, glow) {
-    this.x = x; this.y = y; this.w = 12; this.h = 3; this.speed = 820;
+  constructor(x, y, angle, color, glow, level = 1, opts = {}) {
+    this.x = x; this.y = y;
+    this.level = level;
+    this.isPierce = !!opts.pierce;
+    this.isChain = !!opts.chain;
+    // Pierce and Chain get their own base shapes (not just a level scale-up)
+    // so each reads as distinct in flight, even before any hit resolves —
+    // Pierce goes long and thin (laser-cannon bolt), Chain shorter/stubbier.
+    let baseW = 12, baseH = 3, growW = 3.5, growH = 1.2;
+    if (this.isPierce) { baseW = 92; baseH = 2.2; growW = 18; growH = 0.5; }
+    else if (this.isChain) { baseW = 20; baseH = 3; growW = 4; growH = 0.8; }
+    this.w = baseW + (level - 1) * growW;
+    this.h = baseH + (level - 1) * growH;
+    this.speed = 820;
     this.angle = angle || 0;
     this.vx = Math.cos(this.angle) * this.speed;
     this.vy = Math.sin(this.angle) * this.speed;
-    this.color = color || '#eafcff';
+    const baseColor = color || '#eafcff';
+    this.color = level > 1 ? rgbaStr(lerpColor(baseColor, '#ffffff', (level - 1) * 0.18)) : baseColor;
     this.glow = glow || '#2ef2ff';
+    // Pierce: bullet survives N hits before dying instead of dying on the first.
+    // Chain: on the first hit, also jumps to nearby enemies within chainRadius.
+    this.pierceRemaining = opts.pierce || 0;
+    this.chainRemaining = opts.chain || 0;
+    this.chainRadius = opts.chainRadius || 0;
+    this._chainedTargets = null;
+    this.trailTimer = 0;
+    this.sparkTimer = 0;
+    // Zigzag path: baseY advances in a straight line, y is offset from it by
+    // a sine wave, and the render angle is the path's analytic derivative
+    // (base velocity + the wave's instantaneous slope) rather than a fixed
+    // firing angle — same "derive heading, don't fixed-angle it" approach
+    // used for the Snake boss segments, so the bolt visibly tilts into its
+    // own weave instead of staying a flat horizontal bar.
+    this.baseY = y;
+    this.zigT = rand(0, Math.PI * 2);
+    this.zigAmp = 18;
+    this.zigFreq = 16;
   }
-  update(dt) { this.x += this.vx * dt; this.y += this.vy * dt; }
+  update(dt) {
+    this.x += this.vx * dt;
+    if (this.isChain) {
+      this.baseY += this.vy * dt;
+      this.zigT += dt;
+      this.y = this.baseY + Math.sin(this.zigT * this.zigFreq) * this.zigAmp;
+      const dyDt = this.vy + this.zigAmp * this.zigFreq * Math.cos(this.zigT * this.zigFreq);
+      this.angle = Math.atan2(dyDt, this.vx);
+    } else {
+      this.y += this.vy * dt;
+    }
+    if (this.isPierce) {
+      this.trailTimer -= dt;
+      if (this.trailTimer <= 0) {
+        this.trailTimer = 0.02;
+        Particles.trail(this.x + this.w / 2, this.y + this.h / 2, this.glow);
+      }
+    }
+    if (this.isChain) {
+      this.sparkTimer -= dt;
+      if (this.sparkTimer <= 0) {
+        this.sparkTimer = 0.035;
+        Particles.burst(this.x + rand(-4, 4), this.y + this.h / 2 + rand(-7, 7), '#ffffff', 4, 110);
+      }
+    }
+  }
   get box() { return this; }
   draw() {
     ctx.save();
-    ctx.fillStyle = this.color;
+    ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+    ctx.rotate(this.angle);
     ctx.shadowColor = this.glow;
-    ctx.shadowBlur = 10;
-    if (this.angle) {
-      ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
-      ctx.rotate(this.angle);
-      ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
-      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
-      ctx.shadowBlur = 3;
-      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(-this.w / 2, -this.h / 2, this.w, this.h);
+    ctx.shadowBlur = 10 + (this.level - 1) * 4;
+    if (this.isPierce) {
+      const grad = ctx.createLinearGradient(-this.w / 2, 0, this.w / 2, 0);
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(0.55, this.color);
+      grad.addColorStop(1, '#ffffff');
+      ctx.fillStyle = grad;
     } else {
-      ctx.fillRect(this.x, this.y, this.w, this.h);
-      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
-      ctx.shadowBlur = 3;
-      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(this.x, this.y, this.w, this.h);
+      ctx.fillStyle = this.color;
     }
+    ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
+    ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-this.w / 2, -this.h / 2, this.w, this.h);
     ctx.restore();
   }
 }
@@ -901,7 +1044,7 @@ class EnemyBullet {
 const Bullets = {
   player: [],
   enemy: [],
-  spawnPlayer(x, y, angle, color, glow) { this.player.push(new PlayerBullet(x, y, angle, color, glow)); },
+  spawnPlayer(x, y, angle, color, glow, level, opts) { this.player.push(new PlayerBullet(x, y, angle, color, glow, level, opts)); },
   spawnEnemy(x, y, vx, vy) { this.enemy.push(new EnemyBullet(x, y, vx, vy)); },
   update(dt) {
     this.player.forEach((b) => b.update(dt));
@@ -2033,11 +2176,45 @@ class SnakeBoss {
 const POWERUP_TYPES = {
   spread: { color: '#2ef2ff', label: '⌘', name: 'SPREAD SHOT' },
   rapid: { color: '#ff9d2e', label: '»', name: 'RAPID FIRE' },
+  pierce: { color: '#8aff2e', label: '⇶', name: 'PIERCE BEAM' },
+  chain: { color: '#b98cff', label: '⚡', name: 'CHAIN ARC' },
   shield: { color: '#7b2eff', label: '◈', name: 'SHIELD' },
   health: { color: '#39ff6a', label: '+', name: 'HULL REPAIR' },
   wingman: { color: '#ffcf40', label: 'W', name: 'WINGMAN' },
   bomb: { color: '#ff5a2e', label: '●', name: 'BOMB', weight: 0.4 },
 };
+
+const WEAPON_TYPES = ['spread', 'rapid', 'pierce', 'chain'];
+const WEAPON_MAX_LEVEL = 3;
+// Each weapon levels up along its own shape rather than a flat size/damage
+// multiplier — Spread widens its fan, Rapid adds a stream, Pierce/Chain
+// extend their reach.
+const WEAPON_LEVELS = {
+  spread: [
+    { count: 3, arc: 0.22, cooldown: 0.17 },
+    { count: 5, arc: 0.32, cooldown: 0.16 },
+    { count: 7, arc: 0.42, cooldown: 0.15 },
+  ],
+  rapid: [
+    { streams: 2, cooldown: 0.09 },
+    { streams: 2, cooldown: 0.07 },
+    { streams: 3, cooldown: 0.07 },
+  ],
+  pierce: [
+    { pierceCount: 2, cooldown: 0.16 },
+    { pierceCount: 3, cooldown: 0.14 },
+    { pierceCount: 5, cooldown: 0.12 },
+  ],
+  chain: [
+    { chainCount: 1, chainRadius: 90, cooldown: 0.20 },
+    { chainCount: 2, chainRadius: 110, cooldown: 0.18 },
+    { chainCount: 3, chainRadius: 130, cooldown: 0.16 },
+  ],
+};
+
+const SHIELD_BASE_MAX = 3;
+const SHIELD_LEVEL_STEP = 2;
+const SHIELD_MAX_LEVEL = 3;
 
 function pickWeighted(entries) {
   const total = entries.reduce((sum, [, spec]) => sum + (spec.weight || 1), 0);
@@ -2167,6 +2344,7 @@ const Game = {
     Enemies.clear();
     Enemies.startWave(this.wave);
     Particles.clear();
+    Bolts.clear();
     PowerUps.clear();
     this.boss = null;
     this.lastBossWave = 0;
@@ -2218,6 +2396,48 @@ const Game = {
     this.bombFlashTime = 0.45;
   },
 
+  // Resolves what a bullet does after landing a hit: Chain jumps the hit to
+  // nearby enemies before the bullet dies; Pierce lets the bullet survive to
+  // hit again instead of dying immediately. A bullet dies here unless it
+  // still has pierce charges left.
+  applyBulletImpact(b, hitX, hitY, primaryTarget) {
+    if (b.chainRemaining > 0) {
+      const hitSet = b._chainedTargets || (b._chainedTargets = new Set());
+      hitSet.add(primaryTarget);
+      const candidates = Enemies.list
+        .filter((e) => e.hp > 0 && !hitSet.has(e))
+        .map((e) => ({ e, d: Math.hypot((e.x + e.w / 2) - hitX, (e.y + e.h / 2) - hitY) }))
+        .filter((c) => c.d <= b.chainRadius)
+        .sort((a, c) => a.d - c.d);
+      let jumps = 0;
+      let fromX = hitX, fromY = hitY;
+      for (const c of candidates) {
+        if (jumps >= b.chainRemaining) break;
+        hitSet.add(c.e);
+        jumps++;
+        const tx = c.e.x + c.e.w / 2, ty = c.e.y + c.e.h / 2;
+        Bolts.spawn(fromX, fromY, tx, ty, '#b98cff');
+        Particles.burst(tx, ty, '#b98cff', 8, 140);
+        if (c.e.takeHit()) {
+          c.e.hp = 0;
+          this.addScore(c.e.scoreValue);
+          Audio_.explosion();
+          Particles.burst(tx, ty, c.e.spec.color, 18, 200);
+        }
+        fromX = tx; fromY = ty;
+      }
+    }
+    // Pierce: dies once it has landed pierceCount hits total (decrement then
+    // check the fresh value, not the pre-hit one, so the count matches what
+    // the weapon level actually promises).
+    if (b.pierceRemaining > 0) {
+      b.pierceRemaining -= 1;
+    }
+    if (b.pierceRemaining <= 0) {
+      b._dead = true;
+    }
+  },
+
   updateHud() {
     scoreEl.textContent = String(this.score).padStart(6, '0');
     waveEl.textContent = String(this.wave).padStart(2, '0');
@@ -2230,6 +2450,7 @@ const Game = {
     if (this.player.shieldHp > 0) {
       shieldBarWrapEl.classList.remove('hidden');
       shieldBarFillEl.style.width = `${(this.player.shieldHp / this.player.shieldMaxHp) * 100}%`;
+      shieldLabelEl.textContent = this.player.shieldLevel > 1 ? `SHIELD LV${this.player.shieldLevel}` : 'SHIELD';
     } else {
       shieldBarWrapEl.classList.add('hidden');
     }
@@ -2238,6 +2459,27 @@ const Game = {
       wingmanModeLabelEl.textContent = `WINGMEN: ${this.player.wingmanMode.toUpperCase()}`;
     } else {
       wingmanModeLabelEl.classList.add('hidden');
+    }
+    const heldWeapons = this.player.weaponOrder.filter((t) => t !== 'normal');
+    if (heldWeapons.length > 0) {
+      weaponsWrapEl.classList.remove('hidden');
+      weaponsEl.innerHTML = this.player.weaponOrder.map((t) => {
+        const active = t === this.player.activeWeapon;
+        if (t === 'normal') {
+          return `<div class="weapon-icon${active ? ' active' : ''}" style="--wcolor:#eafcff"><span class="weapon-glyph">•</span></div>`;
+        }
+        const spec = POWERUP_TYPES[t];
+        const level = this.player.weapons[t].level;
+        const pips = Array.from({ length: WEAPON_MAX_LEVEL }, (_, i) =>
+          `<span class="weapon-pip${i < level ? ' filled' : ''}"></span>`
+        ).join('');
+        return `<div class="weapon-icon${active ? ' active' : ''}" style="--wcolor:${spec.color}">
+          <span class="weapon-glyph">${spec.label}</span>
+          <div class="weapon-pips">${pips}</div>
+        </div>`;
+      }).join('');
+    } else {
+      weaponsWrapEl.classList.add('hidden');
     }
   },
 
@@ -2272,16 +2514,44 @@ const Game = {
 
   collectPowerUp(type) {
     const spec = POWERUP_TYPES[type];
+    if (WEAPON_TYPES.includes(type)) {
+      const p = this.player;
+      const held = p.weapons[type];
+      if (!held) {
+        p.weapons[type] = { level: 1 };
+        p.weaponOrder.push(type);
+        p.activeWeapon = type;
+      } else if (held.level < WEAPON_MAX_LEVEL) {
+        held.level += 1;
+      } else {
+        this.addScore(200);
+        this.showToast(`${spec.name} MAXED +200`, spec.color);
+        Audio_.powerup();
+        return;
+      }
+      this.updateHud();
+      const lvl = p.weapons[type].level;
+      this.showToast(`${spec.name} LV${lvl}`, spec.color);
+      Audio_.powerup();
+      return;
+    }
     switch (type) {
-      case 'spread':
-        this.player.weapon = 'spread';
+      case 'shield': {
+        const p = this.player;
+        if (p.shieldLevel < SHIELD_MAX_LEVEL) {
+          p.shieldLevel += 1;
+          p.shieldMaxHp = SHIELD_BASE_MAX + (p.shieldLevel - 1) * SHIELD_LEVEL_STEP;
+          p.shieldHp = p.shieldMaxHp;
+        } else if (p.shieldHp < p.shieldMaxHp) {
+          p.shieldHp = p.shieldMaxHp;
+        } else {
+          this.addScore(200);
+          this.showToast('SHIELD MAXED +200', spec.color);
+          Audio_.powerup();
+          return;
+        }
         break;
-      case 'rapid':
-        this.player.weapon = 'rapid';
-        break;
-      case 'shield':
-        this.player.shieldHp = this.player.shieldMaxHp;
-        break;
+      }
       case 'health':
         if (this.player.hull < this.player.hullMax) {
           this.player.hull = this.player.hullMax;
@@ -2377,12 +2647,13 @@ const Game = {
     Enemies.update(dt, this.player, this.wave, !!this.boss);
     PowerUps.update(dt);
     Particles.update(dt);
+    Bolts.update(dt);
 
     if (!this.boss && Enemies.waveCleared) {
       this.completeWave();
     }
 
-    const bossMilestone = Math.floor(this.wave / 10) * 10;
+    const bossMilestone = Math.floor(this.wave / 5) * 5;
     if (bossMilestone > 0 && bossMilestone !== this.lastBossWave && !this.boss) {
       this.lastBossWave = bossMilestone;
       this.spawnBoss();
@@ -2400,20 +2671,19 @@ const Game = {
             Particles.burst(b.x, b.y, SHIELD_COLOR, 6, 100);
             continue;
           }
-          b._dead = true;
           if (e.takeHit()) {
             e.hp = 0;
             this.addScore(e.scoreValue);
             Audio_.explosion();
             Particles.burst(e.x + e.w / 2, e.y + e.h / 2, e.spec.color, 18, 200);
           }
+          this.applyBulletImpact(b, e.x + e.w / 2, e.y + e.h / 2, e);
         }
       }
       if (!b._dead && this.boss) {
         for (const seg of this.boss.segments) {
           if (seg.hp <= 0) continue;
           if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, seg.box)) {
-            b._dead = true;
             const died = seg.takeHit();
             if (died) {
               this.boss.onSegmentDestroyed(seg);
@@ -2423,6 +2693,7 @@ const Game = {
                 this.addScore(seg.score || 30);
               }
             }
+            this.applyBulletImpact(b, seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, seg);
             this.updateBossBar();
             if (this.boss.isDefeated) this.defeatBoss();
             break;
@@ -2526,6 +2797,7 @@ const Game = {
     Enemies.draw();
     if (this.boss) this.boss.draw();
     PowerUps.draw();
+    Bolts.draw();
     if (this.player) this.player.draw();
     ctx.restore();
 
