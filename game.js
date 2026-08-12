@@ -1537,6 +1537,13 @@ class MiniBoss {
     this.enterSpeed = 210;
     this.entering = true;
     this.t = rand(0, Math.PI * 2);
+    // Separate accumulator for the horizontal sway, advanced only while
+    // 'active' — this.t keeps ticking through charging/beam for cosmetic
+    // animation (core pulse etc.), but x itself is frozen in those phases,
+    // so deriving x from this.t directly would snap to wherever the sine
+    // curve says it "should" be at the new elapsed time once active resumes,
+    // instead of continuing smoothly from the frozen position.
+    this.swayPhase = this.t;
     this.tier = appearanceIndex;
     this.name = `SENTINEL-${bossTierName(appearanceIndex)}`;
     this.color = BOSS_COLOR;
@@ -1571,10 +1578,11 @@ class MiniBoss {
     this.t += dt;
     if (this.entering) {
       this.x -= this.enterSpeed * dt;
-      if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; this.t = 0; }
+      if (this.x <= this.targetX) { this.x = this.targetX; this.entering = false; this.t = 0; this.swayPhase = 0; }
     } else {
       if (this.phase === 'active') {
-        this.x = this.targetX + Math.sin(this.t * 0.5) * 50;
+        this.swayPhase += dt;
+        this.x = this.targetX + Math.sin(this.swayPhase * 0.5) * 50;
         const dy = this.targetY - this.y;
         if (Math.abs(dy) < 12) {
           this.targetY = rand(this.skyTopY, this.skyBottomY);
