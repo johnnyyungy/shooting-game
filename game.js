@@ -595,8 +595,24 @@ const Background = {
     for (let i = 0; i <= peakCount; i++) {
       this.skylinePoints.push({ x: (i / peakCount) * W, h: rand(20, 70) });
     }
-    this.shootingStar = null;
+    this.meteors = [];
     this.shootingStarTimer = rand(15, 30);
+    this.showerTimer = rand(90, 150);
+    this.showerSpawnRemaining = 0;
+    this.showerSpawnTimer = 0;
+  },
+  // Moves down-right (away from the player) rather than down-left — the
+  // latter had a similar trajectory shape to an aimed shot heading toward
+  // the ship, which read as a threat rather than scenery.
+  spawnMeteor() {
+    this.meteors.push({
+      x: rand(-W * 0.05, W * 0.5),
+      y: rand(0, this.horizonY * 0.35),
+      vx: rand(700, 950),
+      vy: rand(380, 520),
+      life: 0,
+      maxLife: rand(0.7, 1.1),
+    });
   },
   update(dt) {
     // Ease toward a "hyperspeed" multiplier while a boss is present, rather
@@ -610,24 +626,40 @@ const Background = {
       if (s.x < 0) { s.x = W; s.y = rand(0, this.horizonY); }
     });
 
-    if (this.shootingStar) {
-      const s = this.shootingStar;
+    this.meteors.forEach((s) => {
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.life += dt;
-      if (s.life >= s.maxLife || s.x < -50 || s.y > this.horizonY) this.shootingStar = null;
-    }
+    });
+    this.meteors = this.meteors.filter((s) => s.life < s.maxLife && s.x <= W + 50 && s.y <= this.horizonY);
+
     this.shootingStarTimer -= dt;
-    if (this.shootingStarTimer <= 0 && !this.shootingStar) {
+    if (this.shootingStarTimer <= 0) {
       this.shootingStarTimer = rand(15, 30);
-      this.shootingStar = {
-        x: rand(W * 0.5, W * 1.05),
-        y: rand(0, this.horizonY * 0.35),
-        vx: rand(-950, -700),
-        vy: rand(380, 520),
-        life: 0,
-        maxLife: rand(0.7, 1.1),
-      };
+      this.spawnMeteor();
+    }
+
+    // Meteor shower: a rarer, bigger event — a staggered burst of several
+    // meteors rather than one at a time. Held off while a boss is present,
+    // same reasoning as the hyperspeed dimming — boss fights already stack
+    // enough visual activity without more background motion competing for
+    // attention.
+    if (!Game.boss) {
+      if (this.showerSpawnRemaining > 0) {
+        this.showerSpawnTimer -= dt;
+        if (this.showerSpawnTimer <= 0) {
+          this.showerSpawnTimer = rand(0.15, 0.3);
+          this.spawnMeteor();
+          this.showerSpawnRemaining--;
+        }
+      } else {
+        this.showerTimer -= dt;
+        if (this.showerTimer <= 0) {
+          this.showerTimer = rand(90, 150);
+          this.showerSpawnRemaining = Math.floor(rand(6, 10));
+          this.showerSpawnTimer = 0;
+        }
+      }
     }
   },
   draw() {
@@ -665,9 +697,9 @@ const Background = {
     });
     ctx.globalAlpha = 1;
 
-    // shooting star — rare, fades in then out over its short life
-    if (this.shootingStar) {
-      const s = this.shootingStar;
+    // meteors — individual rare shooting stars, or several at once during a
+    // shower burst; each fades in then out over its own short life.
+    this.meteors.forEach((s) => {
       const fadeIn = clamp(s.life / 0.15, 0, 1);
       const fadeOut = clamp((s.maxLife - s.life) / 0.2, 0, 1);
       const tailX = s.x - s.vx * 0.09, tailY = s.y - s.vy * 0.09;
@@ -685,7 +717,7 @@ const Background = {
       ctx.lineTo(tailX, tailY);
       ctx.stroke();
       ctx.restore();
-    }
+    });
 
     // sun
     const sunX = W * 0.72, sunY = this.horizonY - 30, sunR = 76;
@@ -1989,10 +2021,14 @@ class MiniBoss {
 
     if (this.phase === 'charging' && this.beamLockPoint !== null) {
       const ray = this.beamRay();
+      // Pulsing brightness instead of a flat static line — reads as an
+      // active, urgent warning rather than background decoration.
+      const flash = 0.5 + 0.5 * Math.sin(this.t * 14);
       ctx.save();
-      ctx.strokeStyle = 'rgba(255,80,80,0.85)';
+      ctx.globalAlpha = 0.45 + flash * 0.55;
+      ctx.strokeStyle = '#ff5050';
       ctx.shadowColor = '#ff5050';
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 8 + flash * 10;
       ctx.lineWidth = 2;
       ctx.setLineDash([10, 8]);
       ctx.beginPath();
@@ -2157,7 +2193,7 @@ class RingCore {
 class RingBoss {
   constructor(appearanceIndex) {
     this.tier = appearanceIndex;
-    this.name = `RING-${bossTierName(appearanceIndex)}`;
+    this.name = `SOVEREIGN-${bossTierName(appearanceIndex)}`;
     this.color = '#00e5ff';
     this.w = 160; this.h = 160;
     this.centerX = W + 140;
@@ -2700,7 +2736,7 @@ const Game = {
     });
     if (DEBUG) {
       document.getElementById('debugTag').classList.remove('hidden');
-      console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Ring/Snake, 0 = reset boss tiers');
+      console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Sovereign/Viper, 0 = reset boss tiers');
     }
     requestAnimationFrame((t) => this.loop(t));
   },
