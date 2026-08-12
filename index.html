@@ -83,15 +83,31 @@
 
       <!-- overlays -->
       <div class="overlay" id="startOverlay">
-        <h1 class="overlay-title">NEON SKIES</h1>
-        <p class="overlay-sub">horizontal sky assault</p>
         <div class="instructions">
-          <div class="key-row"><span class="key">▲</span><span class="key">▼</span><span class="key">◀</span><span class="key">▶</span><span class="or">/</span><span class="key wide">W A S D</span> — maneuver</div>
-          <div class="key-row"><span class="key wide">SPACE</span> — fire cannon</div>
-          <div class="key-row"><span class="key wide">E</span> — cycle weapon</div>
-          <div class="key-row"><span class="key wide">Q</span> — cycle wingman mode</div>
-          <div class="key-row"><span class="key wide">B</span> — bomb</div>
-          <div class="key-row"><span class="key wide">P</span> — pause</div>
+          <div class="key-row">
+            <span class="key-group"><span class="key">▲</span><span class="key">▼</span><span class="key">◀</span><span class="key">▶</span><span class="or">/</span><span class="key wide">W A S D</span></span>
+            <span class="key-desc">maneuver</span>
+          </div>
+          <div class="key-row">
+            <span class="key-group"><span class="key wide">SPACE</span></span>
+            <span class="key-desc">fire cannon</span>
+          </div>
+          <div class="key-row">
+            <span class="key-group"><span class="key wide">E</span></span>
+            <span class="key-desc">cycle weapon</span>
+          </div>
+          <div class="key-row">
+            <span class="key-group"><span class="key wide">Q</span></span>
+            <span class="key-desc">cycle wingman mode</span>
+          </div>
+          <div class="key-row">
+            <span class="key-group"><span class="key wide">B</span></span>
+            <span class="key-desc">bomb</span>
+          </div>
+          <div class="key-row">
+            <span class="key-group"><span class="key wide">P</span></span>
+            <span class="key-desc">pause</span>
+          </div>
         </div>
         <div class="difficulty-select" id="difficultySelect">
           <button class="diff-btn" data-difficulty="easy">EASY</button>
@@ -104,7 +120,9 @@
 
       <div class="overlay hidden" id="pauseOverlay">
         <h2 class="overlay-title small">PAUSED</h2>
+        <div class="instructions" id="pauseInstructions"></div>
         <button class="press-start" id="resumeBtn">RESUME</button>
+        <p class="overlay-hint">or press SPACE / ENTER</p>
       </div>
 
       <div class="overlay hidden" id="gameOverOverlay">

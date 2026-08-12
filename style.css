@@ -579,21 +579,38 @@ canvas#game {
 }
 
 .instructions {
-  margin: 10px 0 4px;
+  margin: 10px auto 4px;
+  max-width: 400px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   font-size: 11px;
   color: #d9cdfa;
   font-weight: 700;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: rgba(46, 242, 255, 0.04);
+  border: 1px solid rgba(46, 242, 255, 0.25);
+  box-shadow: inset 0 0 20px rgba(46, 242, 255, 0.05);
 }
 
 .key-row {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.key-group {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
   flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.key-desc {
+  text-align: left;
 }
 
 .key {
@@ -703,5 +720,6 @@ canvas#game {
 @media (max-width: 640px) {
   .cab { padding: 18px 14px 14px; }
   .marquee-sub { letter-spacing: 3px; }
-  .instructions { font-size: 9px; }
+  .instructions { font-size: 9px; max-width: 300px; }
+  .key-row { grid-template-columns: 140px 1fr; }
 }

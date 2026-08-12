@@ -326,6 +326,7 @@ const Input = {
       this.keys.add(code);
       if (code === 'Space') {
         if (Game.state === 'start' || Game.state === 'gameover') Game.start();
+        else if (Game.state === 'paused') Game.togglePause();
         else this.firePressed = true;
       }
       if (code === 'KeyP' || code === 'Escape') Game.togglePause();
@@ -344,6 +345,7 @@ const Input = {
       if (code === 'Enter') {
         if (Game.state === 'start') Game.start();
         else if (Game.state === 'gameover') Game.start();
+        else if (Game.state === 'paused') Game.togglePause();
       }
     });
     window.addEventListener('keyup', (e) => {
@@ -2388,6 +2390,14 @@ const Game = {
     document.getElementById('resumeBtn').addEventListener('click', () => this.togglePause());
     document.getElementById('retryBtn').addEventListener('click', () => this.start());
     document.getElementById('menuBtn').addEventListener('click', () => this.showMenu());
+    // Single canonical copy of the controls list lives in the start overlay;
+    // clone its contents into the pause overlay so both stay in sync without
+    // duplicating the markup by hand.
+    const sourceInstructions = document.querySelector('#startOverlay .instructions');
+    const pauseInstructionsEl = document.getElementById('pauseInstructions');
+    if (sourceInstructions && pauseInstructionsEl) {
+      pauseInstructionsEl.innerHTML = sourceInstructions.innerHTML;
+    }
     const savedDifficulty = localStorage.getItem(DIFFICULTY_KEY);
     this.setDifficulty(DIFFICULTY_PRESETS[savedDifficulty] ? savedDifficulty : 'normal');
     difficultyButtons.forEach((btn) => {
