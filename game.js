@@ -2547,6 +2547,18 @@ const Game = {
     if (sourceInstructions && pauseInstructionsEl) {
       pauseInstructionsEl.innerHTML = sourceInstructions.innerHTML;
     }
+    // Controls panel starts collapsed on the start screen (it's cluttering
+    // things now that difficulty/mode selection lives here too) — it's
+    // always visible on the pause screen already, so this is purely about
+    // trimming the first screen the player sees, not hiding it entirely.
+    const startInstructionsEl = document.getElementById('startInstructions');
+    const controlsToggleEl = document.getElementById('controlsToggle');
+    if (startInstructionsEl && controlsToggleEl) {
+      controlsToggleEl.addEventListener('click', () => {
+        const nowHidden = startInstructionsEl.classList.toggle('hidden');
+        controlsToggleEl.textContent = nowHidden ? 'CONTROLS ▾' : 'CONTROLS ▴';
+      });
+    }
     const savedDifficulty = localStorage.getItem(DIFFICULTY_KEY);
     this.setDifficulty(DIFFICULTY_PRESETS[savedDifficulty] ? savedDifficulty : 'normal');
     difficultyButtons.forEach((btn) => {
