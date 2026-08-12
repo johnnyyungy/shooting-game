@@ -580,11 +580,11 @@ class Particle {
 
 const Particles = {
   list: [],
-  burst(x, y, color, count, speed) {
+  burst(x, y, color, count, speed, life = [0.3, 0.7], size = [2, 5]) {
     for (let i = 0; i < count; i++) {
       const ang = rand(0, Math.PI * 2);
       const spd = rand(speed * 0.3, speed);
-      this.list.push(new Particle(x, y, Math.cos(ang) * spd, Math.sin(ang) * spd, rand(0.3, 0.7), color, rand(2, 5)));
+      this.list.push(new Particle(x, y, Math.cos(ang) * spd, Math.sin(ang) * spd, rand(life[0], life[1]), color, rand(size[0], size[1])));
     }
   },
   trail(x, y, color) {
@@ -646,13 +646,13 @@ const Bolts = {
       // much punchier bolt than a single thin stroke.
       ctx.strokeStyle = b.color;
       ctx.shadowColor = b.color;
-      ctx.shadowBlur = 20;
-      ctx.lineWidth = 4;
+      ctx.shadowBlur = 26;
+      ctx.lineWidth = 7;
       ctx.stroke();
       ctx.strokeStyle = '#ffffff';
       ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 8;
-      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 12;
+      ctx.lineWidth = 2.5;
       ctx.stroke();
       ctx.restore();
     });
@@ -753,9 +753,15 @@ class Player {
         // A phase offset alone isn't enough — sin(0) and sin(π) are both 0,
         // so the pair would spawn coincident and only diverge with travel
         // time. A spawn-time offset on top keeps them visibly separate from
-        // frame one while still crossing as the opposite phases swing.
-        Bullets.spawnPlayer(gx, gy - 9, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: 0 });
-        Bullets.spawnPlayer(gx, gy + 9, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: Math.PI });
+        // frame one while still crossing as the phases swing.
+        // Quarter-cycle (sin vs. cos) rather than half-cycle (mirrored)
+        // offset: mirrored strands are both at their widest-apart extreme at
+        // the same instant, leaving a gap neither one covers. With a
+        // quarter-cycle offset, whenever one bolt is at its extreme the
+        // other is passing back through center, so the middle is never
+        // uncovered by both at once.
+        Bullets.spawnPlayer(gx, gy - 4, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: 0 });
+        Bullets.spawnPlayer(gx, gy + 4, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: Math.PI / 2 });
       } else {
         this.fireCooldown = 0.14 * diff.cooldownMult;
         Bullets.spawnPlayer(gx, gy);
@@ -1004,8 +1010,8 @@ class PlayerBullet {
     // zigT would get scaled by that same frequency.
     this.zigT = 0;
     this.zigPhase = opts.zigPhase !== undefined ? opts.zigPhase : rand(0, Math.PI * 2);
-    this.zigAmp = 18;
-    this.zigFreq = 16;
+    this.zigAmp = 12;
+    this.zigFreq = 36;
   }
   update(dt) {
     this.x += this.vx * dt;
@@ -1029,22 +1035,38 @@ class PlayerBullet {
       // Without a trail, only an instantaneous rotated bar is ever visible —
       // the sine path itself was never actually seen, just implied by
       // rotation, which is why the "helix" read as noise instead of a curve.
+      // Sampling interval scaled down to match zigFreq — tuned originally at
+      // freq 16 for ~5 samples per quarter-cycle; at the current higher freq
+      // that same interval would only catch ~2 samples per quarter-cycle,
+      // undersampling the tighter curve and leaving visible gaps.
       this.trailTimer -= dt;
       if (this.trailTimer <= 0) {
-        this.trailTimer = 0.018;
+        this.trailTimer = 0.008;
         Particles.trail(this.x + this.w / 2, this.y + this.h / 2, this.glow);
       }
-      // Spark rate halved from before — two bolts now fire per shot instead
-      // of one, so this keeps total spark density where it was rather than
-      // doubling it into a cloud that drowns out the trail.
+      // Short life + small size so these read as a quick electric flicker
+      // rather than a drifting puff of smoke (the default burst() life/size
+      // is tuned for explosions, not sparks).
       this.sparkTimer -= dt;
       if (this.sparkTimer <= 0) {
         this.sparkTimer = 0.07;
-        Particles.burst(this.x + rand(-4, 4), this.y + this.h / 2 + rand(-7, 7), '#ffffff', 4, 110);
+        Particles.burst(this.x + rand(-4, 4), this.y + this.h / 2 + rand(-7, 7), '#ffffff', 2, 90, [0.1, 0.18], [1.5, 2.5]);
       }
     }
   }
-  get box() { return this; }
+  get box() {
+    if (this.isChain) {
+      // Collision-only padding, invisible: the sine wave crosses its own
+      // centerline fastest (velocity peaks exactly at zero-offset), so a
+      // target sitting dead-center in the wiggle actually gets the
+      // *narrowest* window to be caught by the bolt's thin visual hitbox.
+      // Padding the check taller than the rendered bolt compensates without
+      // touching how the curve actually looks.
+      const pad = 14;
+      return { x: this.x, y: this.y - pad / 2, w: this.w, h: this.h + pad };
+    }
+    return this;
+  }
   draw() {
     ctx.save();
     ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
@@ -2266,9 +2288,9 @@ const WEAPON_LEVELS = {
     { pierceCount: 5, cooldown: 0.12 },
   ],
   chain: [
-    { chainCount: 1, chainRadius: 90, cooldown: 0.20 },
-    { chainCount: 2, chainRadius: 110, cooldown: 0.18 },
-    { chainCount: 3, chainRadius: 130, cooldown: 0.16 },
+    { chainCount: 1, chainRadius: 130, cooldown: 0.20 },
+    { chainCount: 2, chainRadius: 160, cooldown: 0.18 },
+    { chainCount: 3, chainRadius: 190, cooldown: 0.16 },
   ],
 };
 
@@ -2461,6 +2483,11 @@ const Game = {
       this.state = 'playing';
       pauseOverlay.classList.add('hidden');
       Music.resume();
+      // Sync the fire flag to whatever's physically held right now, so
+      // resuming while still holding Space (or Enter, or clicking Resume
+      // with Space held) keeps firing immediately instead of needing a
+      // fresh press/release cycle.
+      Input.firePressed = Input.keys.has('Space');
     }
   },
 
