@@ -1074,20 +1074,43 @@ class PlayerBullet {
     ctx.shadowColor = this.glow;
     ctx.shadowBlur = 10 + (this.level - 1) * 4;
     if (this.isPierce) {
+      // Arrowhead + thin shaft: the head deliberately flares wider than the
+      // shaft (not just a corner-taper on a uniform sliver) so the point
+      // actually reads at this bolt's extreme length-to-thickness ratio —
+      // a taper scaled off the shaft's own ~3px thickness was too small a
+      // fraction of the shape to be visible.
       const grad = ctx.createLinearGradient(-this.w / 2, 0, this.w / 2, 0);
       grad.addColorStop(0, 'rgba(255,255,255,0)');
       grad.addColorStop(0.55, this.color);
       grad.addColorStop(1, '#ffffff');
       ctx.fillStyle = grad;
+      const headLen = this.w * 0.4;
+      const headHalfWidth = this.h * 2.2;
+      const headBaseX = this.w / 2 - headLen;
+      ctx.beginPath();
+      ctx.moveTo(this.w / 2, 0);
+      ctx.lineTo(headBaseX, -headHalfWidth);
+      ctx.lineTo(headBaseX, -this.h / 2);
+      ctx.lineTo(-this.w / 2, -this.h / 2);
+      ctx.lineTo(-this.w / 2, this.h / 2);
+      ctx.lineTo(headBaseX, this.h / 2);
+      ctx.lineTo(headBaseX, headHalfWidth);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+      ctx.shadowBlur = 3;
+      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
     } else {
       ctx.fillStyle = this.color;
+      ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
+      ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
+      ctx.shadowBlur = 3;
+      ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-this.w / 2, -this.h / 2, this.w, this.h);
     }
-    ctx.fillRect(-this.w / 2, -this.h / 2, this.w, this.h);
-    ctx.shadowColor = 'rgba(8, 4, 16, 0.4)';
-    ctx.shadowBlur = 3;
-    ctx.strokeStyle = 'rgba(8, 4, 16, 0.3)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(-this.w / 2, -this.h / 2, this.w, this.h);
     ctx.restore();
   }
 }
