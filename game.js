@@ -105,6 +105,19 @@ const Audio_ = {
     osc.start(t0);
     osc.stop(t0 + dur);
   },
+  // Sigmoid waveshaping curve for a WaveShaperNode — gives a harsh, gritty
+  // "crunch" texture instead of the clean filtered-noise sound every other
+  // explosion here uses, so boss-piece destruction reads as distinct rather
+  // than just a louder/longer version of the same clean pop.
+  distortionCurve(amount) {
+    const n = 44100;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      curve[i] = ((3 + amount) * x * 20 * (Math.PI / 180)) / (Math.PI + amount * Math.abs(x));
+    }
+    return curve;
+  },
   shoot() { this.tone(rand(760, 820), 0.08, 'square', 0.05, 420); },
   hitEnemy() { this.tone(220, 0.12, 'sawtooth', 0.06, 60); },
   explosion() {
@@ -204,6 +217,127 @@ const Audio_ = {
     osc2.connect(gain2).connect(this.ctx.destination);
     osc2.start(t0);
     osc2.stop(t0 + 0.28);
+  },
+  bossSegmentBurst() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    // Duration pushed much closer to bossDefeated's (was 0.4s) — length is a
+    // far more reliable "this is bigger" cue during fast gameplay than subtle
+    // filter/gain differences, which weren't registering.
+    const bufSize = this.ctx.sampleRate * 0.6;
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    // Distortion before the filter — a genuinely different texture (harsh,
+    // gritty "crunch") rather than just a bigger/longer version of the same
+    // clean filtered-noise sound every other explosion here uses.
+    const shaper = this.ctx.createWaveShaper();
+    shaper.curve = this.distortionCurve(45);
+    shaper.oversample = '4x';
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.4, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.6);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2200, t0);
+    filter.frequency.exponentialRampToValueAtTime(180, t0 + 0.6);
+    src.connect(shaper).connect(filter).connect(gain).connect(this.ctx.destination);
+    src.start(t0);
+    this.tone(180, 0.35, 'sawtooth', 0.09, 50);
+    // Metallic clang — an inharmonic tone pair (frequencies not in a clean
+    // ratio) reads as bell/metal-like rather than musical, fitting armored
+    // boss plating breaking apart rather than a soft enemy popping.
+    [1800, 2600].forEach((f) => {
+      const osc = this.ctx.createOscillator();
+      const og = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, t0);
+      og.gain.setValueAtTime(0.06, t0);
+      og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
+      osc.connect(og).connect(this.ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.18);
+    });
+    // Tight secondary micro-hit — much closer than bossDefeated's spaced
+    // "ka-BOOM" (60ms here vs. 160ms there), for a quick "crack-crack"
+    // shatter rather than two distinctly-timed booms. Also distorted, to
+    // match the primary hit's texture.
+    setTimeout(() => {
+      if (!this.ctx) return;
+      const t1 = this.ctx.currentTime;
+      const buf2Size = this.ctx.sampleRate * 0.3;
+      const buf2 = this.ctx.createBuffer(1, buf2Size, this.ctx.sampleRate);
+      const data2 = buf2.getChannelData(0);
+      for (let i = 0; i < buf2Size; i++) data2[i] = (Math.random() * 2 - 1) * (1 - i / buf2Size);
+      const src2 = this.ctx.createBufferSource();
+      src2.buffer = buf2;
+      const shaper2 = this.ctx.createWaveShaper();
+      shaper2.curve = this.distortionCurve(45);
+      shaper2.oversample = '4x';
+      const gain2 = this.ctx.createGain();
+      gain2.gain.setValueAtTime(0.3, t1);
+      gain2.gain.exponentialRampToValueAtTime(0.001, t1 + 0.3);
+      const filter2 = this.ctx.createBiquadFilter();
+      filter2.type = 'lowpass';
+      filter2.frequency.setValueAtTime(2400, t1);
+      filter2.frequency.exponentialRampToValueAtTime(250, t1 + 0.3);
+      src2.connect(shaper2).connect(filter2).connect(gain2).connect(this.ctx.destination);
+      src2.start(t1);
+    }, 60);
+  },
+  bossDefeated() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    // Big primary blast, deeper/longer than the regular explosion or a
+    // boss-segment pop. Cutoff kept higher than the first version (was
+    // 1000Hz) — too low a lowpass strips the high-frequency "crack" that
+    // actually reads as punch, so it sounded duller despite the higher gain.
+    const bufSize = this.ctx.sampleRate * 0.8;
+    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.6, t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.8);
+    // Sweeping cutoff again here — bright crack at onset, darkening toward a
+    // muffled thud as it decays, instead of one static (and thus flat/"pop"
+    // sounding) brightness for the whole 0.8s.
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2200, t0);
+    filter.frequency.exponentialRampToValueAtTime(150, t0 + 0.8);
+    src.connect(filter).connect(gain).connect(this.ctx.destination);
+    src.start(t0);
+    // Deep descending rumble underneath for weight (same sweep technique as
+    // laserBeam). Pitched up from the original 70Hz — most small speakers
+    // reproduce that poorly, so it was barely contributing anything audible.
+    this.tone(110, 0.7, 'sawtooth', 0.16, 35);
+    // Secondary boom, further delayed than before (was 90ms, blended into
+    // the tail of the first blast instead of reading as a distinct hit) for
+    // an actual "ka-BOOM" double impact.
+    setTimeout(() => {
+      if (!this.ctx) return;
+      const t1 = this.ctx.currentTime;
+      const buf2Size = this.ctx.sampleRate * 0.5;
+      const buf2 = this.ctx.createBuffer(1, buf2Size, this.ctx.sampleRate);
+      const data2 = buf2.getChannelData(0);
+      for (let i = 0; i < buf2Size; i++) data2[i] = (Math.random() * 2 - 1) * (1 - i / buf2Size);
+      const src2 = this.ctx.createBufferSource();
+      src2.buffer = buf2;
+      const gain2 = this.ctx.createGain();
+      gain2.gain.setValueAtTime(0.42, t1);
+      gain2.gain.exponentialRampToValueAtTime(0.001, t1 + 0.5);
+      const filter2 = this.ctx.createBiquadFilter();
+      filter2.type = 'lowpass';
+      filter2.frequency.setValueAtTime(1800, t1);
+      filter2.frequency.exponentialRampToValueAtTime(150, t1 + 0.5);
+      src2.connect(filter2).connect(gain2).connect(this.ctx.destination);
+      src2.start(t1);
+    }, 160);
   }
 };
 
@@ -1531,7 +1665,7 @@ function damageSegmentsSequentially(boss, amount) {
     if (seg.hp <= 0) {
       boss.onSegmentDestroyed(seg);
       if (!boss.isDefeated) {
-        Audio_.explosion();
+        Audio_.bossSegmentBurst();
         Particles.burst(seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, boss.color, 16, 180);
         Game.addScore(seg.score || 30);
       }
@@ -2874,7 +3008,7 @@ const Game = {
     const tier = this.boss.tier;
     const name = this.boss.name;
     const color = this.boss.color;
-    Audio_.explosion();
+    Audio_.bossDefeated();
     this.shake(0.5, 14);
     Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, color, 40, 260);
     this.boss = null;
@@ -2944,7 +3078,7 @@ const Game = {
             if (died) {
               this.boss.onSegmentDestroyed(seg);
               if (!this.boss.isDefeated) {
-                Audio_.explosion();
+                Audio_.bossSegmentBurst();
                 Particles.burst(seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, this.boss.color, 16, 180);
                 this.addScore(seg.score || 30);
               }
