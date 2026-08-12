@@ -405,6 +405,7 @@ const Background = {
   prevPhaseIndex: 0,
   transitionT: 999,
   transitionDuration: 2.5,
+  speedMult: 1,
   beginTransition() {
     this.prevPhaseIndex = this.phaseIndex;
     this.phaseIndex = (this.phaseIndex + 1) % DAY_PHASES.length;
@@ -414,6 +415,7 @@ const Background = {
     this.phaseIndex = 0;
     this.prevPhaseIndex = 0;
     this.transitionT = 999;
+    this.speedMult = 1;
   },
   get palette() {
     const t = clamp(this.transitionT / this.transitionDuration, 0, 1);
@@ -448,10 +450,14 @@ const Background = {
     });
   },
   update(dt) {
-    this.scroll += dt;
+    // Ease toward a "hyperspeed" multiplier while a boss is present, rather
+    // than snapping — reads as an acceleration/deceleration, not a jump-cut.
+    const targetMult = Game.boss ? 7 : 1;
+    this.speedMult += (targetMult - this.speedMult) * Math.min(1, dt * 1.5);
+    this.scroll += dt * this.speedMult;
     if (this.transitionT < this.transitionDuration) this.transitionT += dt;
     this.stars.forEach((s) => {
-      s.x -= s.speed * dt;
+      s.x -= s.speed * dt * this.speedMult;
       if (s.x < 0) { s.x = W; s.y = rand(0, this.horizonY); }
     });
   },
@@ -466,11 +472,27 @@ const Background = {
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, this.horizonY);
 
-    // stars
+    // stars — plain squares at rest; extra length scales with how far
+    // speedMult has ramped above 1, so it's an exact square when idle and
+    // only stretches into a streak once boosted into hyperspeed.
     this.stars.forEach((s) => {
-      ctx.globalAlpha = s.alpha * pal.starAlpha;
-      ctx.fillStyle = '#eafcff';
-      ctx.fillRect(s.x, s.y, s.size, s.size);
+      const boost = Math.max(0, this.speedMult - 1);
+      // Dim slightly at full hyperspeed so the streaks read as receding
+      // background rather than competing for attention with actual bullets.
+      const boostFrac = clamp(boost / 6, 0, 1);
+      ctx.globalAlpha = s.alpha * pal.starAlpha * (1 - boostFrac * 0.35);
+      const streakLen = clamp(s.size + boost * s.speed * 0.18, s.size, 120);
+      if (streakLen > s.size * 1.5) {
+        // Bright leading edge fading to transparent at the tail — stars
+        // travel toward -x, so the streak's front is at s.x.
+        const grad = ctx.createLinearGradient(s.x, 0, s.x + streakLen, 0);
+        grad.addColorStop(0, '#eafcff');
+        grad.addColorStop(1, 'rgba(234, 252, 255, 0)');
+        ctx.fillStyle = grad;
+      } else {
+        ctx.fillStyle = '#eafcff';
+      }
+      ctx.fillRect(s.x, s.y, streakLen, s.size);
     });
     ctx.globalAlpha = 1;
 
