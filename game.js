@@ -74,6 +74,11 @@ function lerpColor(hexA, hexB, t) {
   const a = hexToRgb(hexA), b = hexToRgb(hexB);
   return [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t));
 }
+// Same as lerpColor but for two already-resolved [r,g,b] arrays (e.g. values
+// pulled from Background.palette, which are arrays, not hex strings).
+function lerpRgb(a, b, t) {
+  return [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t));
+}
 function rgbaStr(rgb, a) {
   return a === undefined ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`;
 }
@@ -448,6 +453,16 @@ const Background = {
         });
       }
     });
+    // Jagged skyline silhouette, authored across [0, W] and tiled twice at
+    // draw time — since the pattern's left/right edges both sit at y=0
+    // implicitly via the shared baseline, it scrolls seamlessly at period W.
+    const peakCount = 14;
+    this.skylinePoints = [];
+    for (let i = 0; i <= peakCount; i++) {
+      this.skylinePoints.push({ x: (i / peakCount) * W, h: rand(20, 70) });
+    }
+    this.shootingStar = null;
+    this.shootingStarTimer = rand(15, 30);
   },
   update(dt) {
     // Ease toward a "hyperspeed" multiplier while a boss is present, rather
@@ -460,6 +475,26 @@ const Background = {
       s.x -= s.speed * dt * this.speedMult;
       if (s.x < 0) { s.x = W; s.y = rand(0, this.horizonY); }
     });
+
+    if (this.shootingStar) {
+      const s = this.shootingStar;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.life += dt;
+      if (s.life >= s.maxLife || s.x < -50 || s.y > this.horizonY) this.shootingStar = null;
+    }
+    this.shootingStarTimer -= dt;
+    if (this.shootingStarTimer <= 0 && !this.shootingStar) {
+      this.shootingStarTimer = rand(15, 30);
+      this.shootingStar = {
+        x: rand(W * 0.5, W * 1.05),
+        y: rand(0, this.horizonY * 0.35),
+        vx: rand(-950, -700),
+        vy: rand(380, 520),
+        life: 0,
+        maxLife: rand(0.7, 1.1),
+      };
+    }
   },
   draw() {
     const pal = this.palette;
@@ -496,6 +531,28 @@ const Background = {
     });
     ctx.globalAlpha = 1;
 
+    // shooting star — rare, fades in then out over its short life
+    if (this.shootingStar) {
+      const s = this.shootingStar;
+      const fadeIn = clamp(s.life / 0.15, 0, 1);
+      const fadeOut = clamp((s.maxLife - s.life) / 0.2, 0, 1);
+      const tailX = s.x - s.vx * 0.09, tailY = s.y - s.vy * 0.09;
+      ctx.save();
+      ctx.globalAlpha = Math.min(fadeIn, fadeOut);
+      const grad = ctx.createLinearGradient(s.x, s.y, tailX, tailY);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.strokeStyle = grad;
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // sun
     const sunX = W * 0.72, sunY = this.horizonY - 30, sunR = 76;
     const sunGrad = ctx.createLinearGradient(0, sunY - sunR, 0, sunY + sunR);
@@ -521,6 +578,23 @@ const Background = {
     ctx.beginPath();
     ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
+
+    // distant skyline silhouette — tinted from the sky-bottom color so its
+    // hue shifts with the day cycle; scroll speed shares speedMult so it
+    // visibly rushes by faster during hyperspeed too, not just the stars.
+    ctx.save();
+    ctx.fillStyle = rgbaStr(lerpRgb(pal.skyBottom, hexToRgb('#04010a'), 0.55));
+    const skylineScroll = (this.scroll * 8) % W;
+    for (let tile = -1; tile <= 1; tile++) {
+      const baseX = tile * W - skylineScroll;
+      ctx.beginPath();
+      ctx.moveTo(baseX, this.horizonY);
+      this.skylinePoints.forEach((p) => ctx.lineTo(baseX + p.x, this.horizonY - p.h));
+      ctx.lineTo(baseX + W, this.horizonY);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
 
     // ground plane
