@@ -672,6 +672,21 @@ canvas#game {
   50% { box-shadow: 0 0 0 2px rgba(46,242,255,0.45), 0 6px 0 #0d6b80, 0 10px 30px rgba(46,242,255,0.55); }
 }
 
+.press-start.secondary {
+  margin-top: 10px;
+  font-size: 10px;
+  padding: 10px 18px;
+  color: #d9cdfa;
+  background: linear-gradient(180deg, #2a1c4a, #150a2e);
+  box-shadow: 0 0 0 1px rgba(217, 205, 250, 0.3), 0 4px 0 #1a0f33;
+  animation: none;
+}
+
+.press-start.secondary:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 1px rgba(217, 205, 250, 0.3), 0 1px 0 #1a0f33;
+}
+
 .cab-footer {
   margin-top: 16px;
   display: flex;

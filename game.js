@@ -743,8 +743,17 @@ class Player {
         Bullets.spawnPlayer(gx, gy, 0, '#8aff2e', '#5cff00', level, { pierce: cfg.pierceCount });
       } else if (this.activeWeapon === 'chain') {
         const cfg = WEAPON_LEVELS.chain[level - 1];
-        this.fireCooldown = cfg.cooldown * diff.cooldownMult;
-        Bullets.spawnPlayer(gx, gy, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius });
+        // Twin bolts in a double-helix (opposite zigzag phase) instead of one
+        // single wiggling line — less likely for a target to slip between
+        // both strands, and reads more like an actual electric strand.
+        // Cooldown doubles to keep total bullets/sec unchanged from before.
+        this.fireCooldown = cfg.cooldown * diff.cooldownMult * 2;
+        // A phase offset alone isn't enough — sin(0) and sin(π) are both 0,
+        // so the pair would spawn coincident and only diverge with travel
+        // time. A spawn-time offset on top keeps them visibly separate from
+        // frame one while still crossing as the opposite phases swing.
+        Bullets.spawnPlayer(gx, gy - 9, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: 0 });
+        Bullets.spawnPlayer(gx, gy + 9, 0, '#b98cff', '#8a2eff', level, { chain: cfg.chainCount, chainRadius: cfg.chainRadius, zigPhase: Math.PI });
       } else {
         this.fireCooldown = 0.14 * diff.cooldownMult;
         Bullets.spawnPlayer(gx, gy);
@@ -960,7 +969,7 @@ class PlayerBullet {
     // Pierce goes long and thin (laser-cannon bolt), Chain shorter/stubbier.
     let baseW = 12, baseH = 3, growW = 3.5, growH = 1.2;
     if (this.isPierce) { baseW = 92; baseH = 2.2; growW = 18; growH = 0.5; }
-    else if (this.isChain) { baseW = 20; baseH = 3; growW = 4; growH = 0.8; }
+    else if (this.isChain) { baseW = 16; baseH = 2.2; growW = 3; growH = 0.6; }
     this.w = baseW + (level - 1) * growW;
     this.h = baseH + (level - 1) * growH;
     this.speed = 820;
@@ -985,7 +994,14 @@ class PlayerBullet {
     // used for the Snake boss segments, so the bolt visibly tilts into its
     // own weave instead of staying a flat horizontal bar.
     this.baseY = y;
-    this.zigT = rand(0, Math.PI * 2);
+    // A twin-bolt pair passes an explicit zigPhase (0 / π) so they oscillate
+    // in opposite directions as a double helix; anything else gets a random
+    // phase so unrelated shots don't all wiggle in lockstep. zigPhase is kept
+    // separate from zigT (pure elapsed time) rather than folded into it,
+    // since zigT gets multiplied by zigFreq inside sin() — a phase baked into
+    // zigT would get scaled by that same frequency.
+    this.zigT = 0;
+    this.zigPhase = opts.zigPhase !== undefined ? opts.zigPhase : rand(0, Math.PI * 2);
     this.zigAmp = 18;
     this.zigFreq = 16;
   }
@@ -994,8 +1010,8 @@ class PlayerBullet {
     if (this.isChain) {
       this.baseY += this.vy * dt;
       this.zigT += dt;
-      this.y = this.baseY + Math.sin(this.zigT * this.zigFreq) * this.zigAmp;
-      const dyDt = this.vy + this.zigAmp * this.zigFreq * Math.cos(this.zigT * this.zigFreq);
+      this.y = this.baseY + Math.sin(this.zigT * this.zigFreq + this.zigPhase) * this.zigAmp;
+      const dyDt = this.vy + this.zigAmp * this.zigFreq * Math.cos(this.zigT * this.zigFreq + this.zigPhase);
       this.angle = Math.atan2(dyDt, this.vx);
     } else {
       this.y += this.vy * dt;
@@ -1008,9 +1024,20 @@ class PlayerBullet {
       }
     }
     if (this.isChain) {
+      // Without a trail, only an instantaneous rotated bar is ever visible —
+      // the sine path itself was never actually seen, just implied by
+      // rotation, which is why the "helix" read as noise instead of a curve.
+      this.trailTimer -= dt;
+      if (this.trailTimer <= 0) {
+        this.trailTimer = 0.018;
+        Particles.trail(this.x + this.w / 2, this.y + this.h / 2, this.glow);
+      }
+      // Spark rate halved from before — two bolts now fire per shot instead
+      // of one, so this keeps total spark density where it was rather than
+      // doubling it into a cloud that drowns out the trail.
       this.sparkTimer -= dt;
       if (this.sparkTimer <= 0) {
-        this.sparkTimer = 0.035;
+        this.sparkTimer = 0.07;
         Particles.burst(this.x + rand(-4, 4), this.y + this.h / 2 + rand(-7, 7), '#ffffff', 4, 110);
       }
     }
@@ -2360,6 +2387,7 @@ const Game = {
     document.getElementById('startBtn').addEventListener('click', () => this.start());
     document.getElementById('resumeBtn').addEventListener('click', () => this.togglePause());
     document.getElementById('retryBtn').addEventListener('click', () => this.start());
+    document.getElementById('menuBtn').addEventListener('click', () => this.showMenu());
     const savedDifficulty = localStorage.getItem(DIFFICULTY_KEY);
     this.setDifficulty(DIFFICULTY_PRESETS[savedDifficulty] ? savedDifficulty : 'normal');
     difficultyButtons.forEach((btn) => {
@@ -2378,6 +2406,12 @@ const Game = {
     difficultyButtons.forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.difficulty === difficulty);
     });
+  },
+
+  showMenu() {
+    this.state = 'start';
+    gameOverOverlay.classList.add('hidden');
+    startOverlay.classList.remove('hidden');
   },
 
   start() {
