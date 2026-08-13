@@ -777,16 +777,19 @@ const Background = {
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, this.horizonY, W, H - this.horizonY);
 
-    // horizon glow line
+    // horizon glow — a soft vertical band that fades upward from the seam
+    // instead of a stroked line, so it reads as ambient light bleeding into
+    // the sky rather than a boundary marker. It used to be an actual hard
+    // limit the player couldn't cross; now that it isn't, a crisp "this
+    // looks important" line is a stale, misleading cue — but a plain flat
+    // seam lost too much color, so this brings a bit of it back as glow.
     ctx.save();
-    ctx.strokeStyle = rgbaStr(pal.sunMid);
-    ctx.shadowColor = rgbaStr(pal.sunMid);
-    ctx.shadowBlur = 14;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, this.horizonY);
-    ctx.lineTo(W, this.horizonY);
-    ctx.stroke();
+    const glowHeight = 20;
+    const horizonGlow = ctx.createLinearGradient(0, this.horizonY - glowHeight, 0, this.horizonY);
+    horizonGlow.addColorStop(0, rgbaStr(pal.sunMid, 0));
+    horizonGlow.addColorStop(1, rgbaStr(pal.sunMid, 0.5));
+    ctx.fillStyle = horizonGlow;
+    ctx.fillRect(0, this.horizonY - glowHeight, W, glowHeight);
     ctx.restore();
 
     // perspective grid — slides laterally in sync with the same speedMult-
