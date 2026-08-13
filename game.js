@@ -877,7 +877,10 @@ const Particles = {
 // bursts alone don't read as "this hit jumped from A to B."
 const Bolts = {
   list: [],
-  spawn(x1, y1, x2, y2, color) {
+  // width/life are optional so callers with a different visual weight (e.g.
+  // the thinner, longer-lived tether hazard crackle) don't have to affect
+  // the Chain weapon's own default look.
+  spawn(x1, y1, x2, y2, color, width = 7, life = 0.3) {
     const segments = 4;
     const points = [{ x: x1, y: y1 }];
     const dx = x2 - x1, dy = y2 - y1;
@@ -892,7 +895,7 @@ const Bolts = {
       });
     }
     points.push({ x: x2, y: y2 });
-    this.list.push({ points, color, life: 0.3, maxLife: 0.3 });
+    this.list.push({ points, color, width, life, maxLife: life });
   },
   update(dt) {
     this.list.forEach((b) => { b.life -= dt; });
@@ -909,13 +912,13 @@ const Bolts = {
       // much punchier bolt than a single thin stroke.
       ctx.strokeStyle = b.color;
       ctx.shadowColor = b.color;
-      ctx.shadowBlur = 26;
-      ctx.lineWidth = 7;
+      ctx.shadowBlur = b.width * 3.7;
+      ctx.lineWidth = b.width;
       ctx.stroke();
       ctx.strokeStyle = '#ffffff';
       ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 12;
-      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = b.width * 1.7;
+      ctx.lineWidth = b.width * 0.36;
       ctx.stroke();
       ctx.restore();
     });
@@ -1671,6 +1674,141 @@ const Enemies = {
     this.spawnTimer = 0;
     this.escapedInWave = 0;
   }
+};
+
+/* ============================== HAZARDS ============================== */
+
+// Indestructible obstacle, not an enemy: two drones linked by a crackling
+// tether that must be dodged rather than shot. The pair is a rigid rod
+// pivoting around its own center — reach matches the player's full vertical
+// travel band, so a vertical orientation blocks one whole side, while a
+// near-horizontal orientation collapses the same rod into a short segment,
+// opening real gaps above/below to dash through. Direction reversals are
+// randomized (see TetherHazard.reverseTimer) and telegraphed by a flash
+// before they happen, so the safe side never flips without warning.
+const HAZARD_UNLOCK_WAVE = 16;
+const HAZARD_COLOR = '#f5ff4a';
+const HAZARD_TETHER_COLOR = '#7dfaff';
+
+class TetherHazard {
+  constructor() {
+    this.w = 26; this.h = 20;
+    this.pivotX = W + 60;
+    this.travelSpeed = rand(55, 70);
+    // Fixed-length rod pivoting around its own center, both drones always
+    // 180 degrees apart ("spin in unison"). Reach matches the player's full
+    // vertical travel band, same as the original edge-to-edge span, so a
+    // vertical orientation still blocks top-to-bottom — but a horizontal
+    // orientation collapses that same rod into a short segment sitting at
+    // the pivot's height, opening real gaps above and below to dash through.
+    const playTop = Background.horizonY * 0.02;
+    const playBottom = Background.horizonY - this.h - 4;
+    this.pivotY = (playTop + playBottom) / 2;
+    this.radius = (playBottom - playTop) / 2;
+    this.angle = Math.PI / 2;
+    this.dir = Math.random() < 0.5 ? 1 : -1;
+    this.angularSpeed = rand(0.7, 1.0);
+    // Direction reversals are randomized so the rotation can't be fully
+    // memorized, but always telegraphed by a flash first so a flip never
+    // blindsides the player mid-commit.
+    this.reverseTimer = rand(3, 6);
+    this.flashDuration = 0.5;
+    this.flashSoundPlayed = false;
+    this.crackleTimer = 0;
+    this._dead = false;
+  }
+  get endAX() { return this.pivotX + Math.cos(this.angle) * this.radius; }
+  get endAY() { return this.pivotY + Math.sin(this.angle) * this.radius; }
+  get endBX() { return this.pivotX - Math.cos(this.angle) * this.radius; }
+  get endBY() { return this.pivotY - Math.sin(this.angle) * this.radius; }
+  get topBox() { return { x: this.endAX - this.w / 2, y: this.endAY - this.h / 2, w: this.w, h: this.h }; }
+  get bottomBox() { return { x: this.endBX - this.w / 2, y: this.endBY - this.h / 2, w: this.w, h: this.h }; }
+  get isFlashing() { return this.reverseTimer <= this.flashDuration; }
+  // Straight line between the two drones' centers — the actual hazard the
+  // player has to dance around. Recomputed fresh each frame from the live
+  // drone positions so it always matches what's on screen.
+  get tetherRay() {
+    return { x1: this.endAX, y1: this.endAY, x2: this.endBX, y2: this.endBY };
+  }
+  update(dt) {
+    this.pivotX -= this.travelSpeed * dt;
+    this.reverseTimer -= dt;
+    if (this.isFlashing && !this.flashSoundPlayed) {
+      this.flashSoundPlayed = true;
+      Audio_.powerupReroll();
+    }
+    if (this.reverseTimer <= 0) {
+      this.dir *= -1;
+      this.angularSpeed = rand(0.7, 1.0);
+      this.reverseTimer = rand(3, 6);
+      this.flashSoundPlayed = false;
+    }
+    this.angle += this.dir * this.angularSpeed * dt;
+    // Reuses the Chain weapon's jagged-bolt renderer, fired often enough to
+    // overlap while fading, so the tether reads as a flickering live arc
+    // instead of a static line — no new render code needed.
+    this.crackleTimer -= dt;
+    if (this.crackleTimer <= 0) {
+      this.crackleTimer = rand(0.05, 0.09);
+      const ray = this.tetherRay;
+      Bolts.spawn(ray.x1, ray.y1, ray.x2, ray.y2, HAZARD_TETHER_COLOR, 3.5, 0.3);
+    }
+    if (this.pivotX < -this.radius - 60) this._dead = true;
+  }
+  drawDrone(x, y) {
+    // Fast white/hazard-color blink in the run-up to a direction reversal —
+    // same blink-toggle technique used for the player's invuln flicker.
+    const flashOn = this.isFlashing && Math.floor(this.reverseTimer * 12) % 2 === 0;
+    const c = flashOn ? '#ffffff' : HAZARD_COLOR;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.moveTo(this.w / 2, 0);
+    ctx.lineTo(0, -this.h / 2);
+    ctx.lineTo(-this.w / 2, 0);
+    ctx.lineTo(0, this.h / 2);
+    ctx.closePath();
+    ctx.fillStyle = c;
+    ctx.shadowColor = c;
+    ctx.shadowBlur = 14;
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+  draw() {
+    this.drawDrone(this.endAX, this.endAY);
+    this.drawDrone(this.endBX, this.endBY);
+  }
+}
+
+const Hazards = {
+  list: [],
+  spawnTimer: Infinity,
+  // Does NOT clear this.list — a hazard already in flight when a wave
+  // completes has nothing to do with the new wave starting and should
+  // finish its own crossing and exit off-screen, not vanish mid-flight.
+  // Only Hazards.clear() (a fresh game) resets the list itself.
+  startWave(wave) {
+    this.spawnTimer = wave >= HAZARD_UNLOCK_WAVE ? rand(5, 8) : Infinity;
+  },
+  // Held off while a boss is present, same reasoning as the hyperspeed
+  // star-dimming and meteor showers — boss fights already stack enough
+  // visual activity without another hazard competing for attention.
+  update(dt, wave, bossActive) {
+    if (wave >= HAZARD_UNLOCK_WAVE && !bossActive) {
+      this.spawnTimer -= dt;
+      if (this.spawnTimer <= 0) {
+        this.list.push(new TetherHazard());
+        this.spawnTimer = rand(14, 20);
+        Game.showToast('TETHER DRONES INCOMING', HAZARD_COLOR);
+        Audio_.bossWarning();
+      }
+    }
+    this.list.forEach((h) => h.update(dt));
+    this.list = this.list.filter((h) => !h._dead);
+  },
+  draw() { this.list.forEach((h) => h.draw()); },
+  clear() { this.list = []; this.spawnTimer = Infinity; }
 };
 
 /* ============================== BOSSES ============================== */
@@ -2768,6 +2906,8 @@ const Game = {
     Particles.clear();
     Bolts.clear();
     PowerUps.clear();
+    Hazards.clear();
+    Hazards.startWave(this.wave);
     this.boss = null;
     this.lastBossWave = 0;
     this.bossRotationIndex = 0;
@@ -2934,6 +3074,7 @@ const Game = {
     this.wave += 1;
     this.updateHud();
     Enemies.startWave(this.wave);
+    Hazards.startWave(this.wave);
   },
 
   showToast(text, color) {
@@ -3081,6 +3222,7 @@ const Game = {
     PowerUps.update(dt);
     Particles.update(dt);
     Bolts.update(dt);
+    Hazards.update(dt, this.wave, !!this.boss);
 
     if (!this.boss && Enemies.waveCleared) {
       this.completeWave();
@@ -3209,6 +3351,26 @@ const Game = {
       }
     }
 
+    // tether hazards vs player — indestructible, so contact just damages the
+    // player (same as touching a boss) rather than destroying anything.
+    for (const hz of Hazards.list) {
+      if (rectsOverlap(hz.topBox, this.player.hitbox) || rectsOverlap(hz.bottomBox, this.player.hitbox)) {
+        this.player.hit();
+        this.updateHud();
+        if (this.player.lives <= 0) { this.gameOver(); return; }
+        continue;
+      }
+      const ray = hz.tetherRay;
+      const pc = { x: this.player.x + this.player.w / 2, y: this.player.y + this.player.h / 2 };
+      const dist = pointSegmentDistance(pc.x, pc.y, ray.x1, ray.y1, ray.x2, ray.y2);
+      const hitRadius = 6 + Math.min(this.player.w, this.player.h) / 2;
+      if (dist <= hitRadius) {
+        this.player.hit();
+        this.updateHud();
+        if (this.player.lives <= 0) { this.gameOver(); return; }
+      }
+    }
+
     // power-ups vs player
     for (const p of PowerUps.list) {
       if (rectsOverlap(p.box, this.player.hitbox)) {
@@ -3239,6 +3401,7 @@ const Game = {
     Enemies.draw();
     if (this.boss) this.boss.draw();
     PowerUps.draw();
+    Hazards.draw();
     Bolts.draw();
     if (this.player) this.player.draw();
     ctx.restore();
