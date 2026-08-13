@@ -18,6 +18,7 @@ const pauseOverlay = document.getElementById('pauseOverlay');
 const gameOverOverlay = document.getElementById('gameOverOverlay');
 const finalScoreEl = document.getElementById('finalScore');
 const highScoreEl = document.getElementById('highScore');
+const difficultyTagEl = document.getElementById('difficultyTag');
 const powerupToastEl = document.getElementById('powerupToast');
 const shieldBarWrapEl = document.getElementById('shieldBarWrap');
 const shieldBarFillEl = document.getElementById('shieldBarFill');
@@ -2747,6 +2748,7 @@ const Game = {
     difficultyButtons.forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.difficulty === difficulty);
     });
+    difficultyTagEl.textContent = DIFFICULTY_PRESETS[difficulty].label;
   },
 
   showMenu() {

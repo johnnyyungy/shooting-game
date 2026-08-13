@@ -179,8 +179,16 @@ canvas#game {
 }
 
 .hud-left { color: var(--cyan); text-align: left; }
-.hud-center { color: var(--orange); text-align: center; }
-.hud-right { color: var(--magenta); text-align: right; }
+.hud-center {
+  color: var(--orange);
+  text-align: center;
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+}
+.hud-right { color: var(--magenta); text-align: right; opacity: 0.5; }
+.hud-right .hud-value { font-size: 11px; }
 
 .hud-value { font-size: 15px; }
 
