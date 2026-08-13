@@ -1860,6 +1860,13 @@ class TetherHazard {
   }
 }
 
+// Bosses trigger on a known schedule (wave % 5 === 0 — see the bossMilestone
+// check in Game.update), so the wave right before one is knowable in advance.
+// Suppressing new hazard spawns during that wave means nothing is still
+// crossing the screen by the time the boss wave's bossActive gate kicks in,
+// so a hazard can't stack onto a boss fight and make it unexpectedly harder.
+function isPreBossWave(wave) { return (wave + 1) % 5 === 0; }
+
 const Hazards = {
   list: [],
   spawnTimer: Infinity,
@@ -1868,7 +1875,16 @@ const Hazards = {
   // finish its own crossing and exit off-screen, not vanish mid-flight.
   // Only Hazards.clear() (a fresh game) resets the list itself.
   startWave(wave) {
-    this.spawnTimer = wave >= HAZARD_UNLOCK_WAVE ? rand(5, 8) : Infinity;
+    if (wave < HAZARD_UNLOCK_WAVE) {
+      this.spawnTimer = Infinity;
+    } else if (!isFinite(this.spawnTimer)) {
+      // First wave hazards become available — start the initial short
+      // delay. On every later wave transition, leave the existing
+      // countdown alone: it used to get reset to this same short delay on
+      // every single wave clear, which is why hazards spawned far more
+      // often than the intended 14-20s gap between them was supposed to.
+      this.spawnTimer = rand(5, 8);
+    }
   },
   // Held off while a boss is present, same reasoning as the hyperspeed
   // star-dimming and meteor showers — boss fights already stack enough
@@ -1877,10 +1893,18 @@ const Hazards = {
     if (wave >= HAZARD_UNLOCK_WAVE && !bossActive) {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
-        this.list.push(new TetherHazard());
-        this.spawnTimer = rand(14, 20);
-        Game.showToast('TETHER DRONES INCOMING', HAZARD_COLOR);
-        Audio_.bossWarning();
+        if (isPreBossWave(wave)) {
+          // Hold at the door rather than spawning or drifting further
+          // negative — the moment this wave ends, startWave leaves the
+          // timer alone (still <=0) so the very next eligible wave spawns
+          // one right away instead of waiting out a fresh full delay.
+          this.spawnTimer = 0;
+        } else {
+          this.list.push(new TetherHazard());
+          this.spawnTimer = rand(14, 20);
+          Game.showToast('GEMINI INCOMING', HAZARD_COLOR);
+          Audio_.bossWarning();
+        }
       }
     }
     this.list.forEach((h) => h.update(dt));
