@@ -2814,9 +2814,14 @@ const Game = {
     Enemies.list = [];
     Bullets.enemy = [];
     if (this.boss) {
-      this.boss.applyBombDamage(9);
-      this.updateBossBar();
-      if (this.boss.isDefeated) this.defeatBoss();
+      if (this.boss.entering) {
+        Audio_.shieldBlock();
+        Particles.burst(this.boss.x + this.boss.w / 2, this.boss.y + this.boss.h / 2, '#aab4c8', 10, 130);
+      } else {
+        this.boss.applyBombDamage(9);
+        this.updateBossBar();
+        if (this.boss.isDefeated) this.defeatBoss();
+      }
     }
     Audio_.bombBlast();
     this.shake(0.4, 12);
@@ -3112,6 +3117,15 @@ const Game = {
         for (const seg of this.boss.segments) {
           if (seg.hp <= 0) continue;
           if (rectsOverlap({ x: b.x, y: b.y, w: b.w, h: b.h }, seg.box)) {
+            // Still sliding into position — deflect the hit instead of
+            // damaging it, so a fully-built loadout can't melt a boss
+            // before the fight has actually started.
+            if (this.boss.entering) {
+              Audio_.shieldBlock();
+              Particles.burst(seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, '#aab4c8', 5, 90);
+              this.applyBulletImpact(b, seg.box.x + seg.box.w / 2, seg.box.y + seg.box.h / 2, seg);
+              break;
+            }
             const died = seg.takeHit();
             if (died) {
               this.boss.onSegmentDestroyed(seg);
