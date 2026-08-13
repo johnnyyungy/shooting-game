@@ -539,6 +539,12 @@ const DAY_PALETTES = {
 
 const Background = {
   horizonY: H * 0.62,
+  // Gameplay's actual lower bound — extends past the horizon into what used
+  // to be dead ground-grid space, stopping with a safety margin above the
+  // HUD's hull/lives/bombs row rather than reaching all the way to it. The
+  // ground/grid rendering itself is untouched; only entity spawn/movement
+  // bounds read from this instead of horizonY now.
+  get playBottom() { return this.horizonY + (H - this.horizonY) * 0.45; },
   scroll: 0,
   stars: [],
   phaseIndex: 0,
@@ -783,7 +789,14 @@ const Background = {
     ctx.stroke();
     ctx.restore();
 
-    // perspective grid
+    // perspective grid — slides laterally in sync with the same speedMult-
+    // scaled this.scroll driving the skyline, instead of the old OutRun-style
+    // toward-camera rush. This game's actual travel is lateral (everything
+    // else scrolls right-to-left), so a "coming at the player" ground grid
+    // was asserting a different direction of motion than the rest of the
+    // scene. Vertical lines (running parallel to travel) now slide sideways;
+    // horizontal rungs (perpendicular to travel) stay at fixed perspective
+    // spacing, since the player isn't approaching/receding from the horizon.
     ctx.save();
     ctx.strokeStyle = 'rgba(46, 242, 255, 0.5)';
     ctx.shadowColor = 'rgba(46, 242, 255, 0.6)';
@@ -791,18 +804,32 @@ const Background = {
     ctx.lineWidth = 1;
     const vanishX = W * 0.5;
     const vCount = 14;
+    const bottomSpread = W * 1.3;
+    // Lines no longer collapse to one exact vanishing pixel — that single
+    // fixed point never slides while everything around it does, which both
+    // flickers as adjacent lines' razor-thin angular gaps widen/narrow near
+    // the tip, and leaves the corners near the horizon uncovered (nothing
+    // has fanned out far enough that close to a true point). Spreading the
+    // top anchors across a wide band instead — synced to the same slide
+    // phase as the bottom, just scaled down — fixes both: real separation
+    // at the tip, and real line coverage reaching into those corners. More
+    // lines overall (vCount) keeps the fan dense despite the wider spread.
+    const topSpread = 520;
+    const vSpacing = bottomSpread / vCount;
+    const vSlide = (this.scroll * 140) % vSpacing;
+    const topSlide = vSlide * (topSpread / bottomSpread);
     for (let i = -vCount; i <= vCount; i++) {
-      const bottomX = vanishX + (i / vCount) * W * 1.3;
+      const bottomX = vanishX + (i / vCount) * bottomSpread - vSlide;
+      const topX = vanishX + (i / vCount) * topSpread - topSlide;
       ctx.globalAlpha = 0.55;
       ctx.beginPath();
-      ctx.moveTo(vanishX, this.horizonY);
+      ctx.moveTo(topX, this.horizonY);
       ctx.lineTo(bottomX, H);
       ctx.stroke();
     }
     const rungCount = 9;
-    const speedFactor = (this.scroll * 0.6) % 1;
     for (let i = 0; i < rungCount; i++) {
-      const f = (i + speedFactor) / rungCount;
+      const f = i / rungCount;
       const y = this.horizonY + (H - this.horizonY) * f * f;
       ctx.globalAlpha = 0.15 + f * 0.55;
       ctx.beginPath();
@@ -813,6 +840,55 @@ const Background = {
     ctx.restore();
     ctx.globalAlpha = 1;
   }
+};
+
+/* ============================== FOREGROUND ============================== */
+
+// Thin, fast, translucent streaks drawn in front of everything (including
+// the player) — the one depth layer this game didn't have yet, since every
+// other parallax element (skyline, meteors, stars, ground grid) sits behind
+// or at the play layer. Deliberately translucent and brief on screen so a
+// streak crossing over a bullet or the ship for an instant never meaningfully
+// hurts readability the way an opaque foreground object could.
+const Foreground = {
+  streaks: [],
+  spawnTimer: rand(0.6, 1.4),
+  update(dt) {
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0) {
+      // Scales with the same hyperspeed speedMult as everything else, so
+      // foreground streaks intensify right along with the background during
+      // boss fights instead of staying oblivious to it.
+      this.spawnTimer = rand(0.6, 1.4) / Background.speedMult;
+      this.streaks.push({
+        y: rand(0, H),
+        speed: rand(900, 1300) * Background.speedMult,
+        len: rand(50, 110),
+        width: rand(1, 2.2),
+        alpha: rand(0.08, 0.2),
+        x: W + 120,
+      });
+    }
+    this.streaks.forEach((s) => { s.x -= s.speed * dt; });
+    this.streaks = this.streaks.filter((s) => s.x + s.len > -20);
+  },
+  draw() {
+    this.streaks.forEach((s) => {
+      ctx.save();
+      ctx.globalAlpha = s.alpha;
+      const grad = ctx.createLinearGradient(s.x, s.y, s.x + s.len, s.y);
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(1, 'rgba(255,255,255,0.95)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = s.width;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x + s.len, s.y);
+      ctx.stroke();
+      ctx.restore();
+    });
+  },
+  clear() { this.streaks = []; }
 };
 
 /* ============================== PARTICLES ============================== */
@@ -966,7 +1042,7 @@ class Player {
     vx = (vx / len) * this.speed;
     vy = (vy / len) * this.speed;
     this.x = clamp(this.x + vx * dt, 6, W - this.w - 6);
-    this.y = clamp(this.y + vy * dt, Background.horizonY * 0.02, Background.horizonY - this.h - 4);
+    this.y = clamp(this.y + vy * dt, Background.horizonY * 0.02, Background.playBottom - this.h - 4);
 
     this.tilt += ((vy / this.speed) * 0.35 - this.tilt) * Math.min(1, dt * 10);
 
@@ -1447,7 +1523,7 @@ class Enemy {
     this.spec = spec;
     this.w = spec.w; this.h = spec.h;
     this.x = W + rand(10, 80);
-    const yMin = Background.horizonY * 0.05, yMax = Background.horizonY - spec.h - 10;
+    const yMin = Background.horizonY * 0.05, yMax = Background.playBottom - spec.h - 10;
     this.y = fixedY !== undefined ? clamp(fixedY, yMin, yMax) : rand(yMin, yMax);
     const tier = waveTier(wave);
     const hpGrowth = (type === 'cruiser' || type === 'turret') ? tier : Math.floor(tier / 2);
@@ -1648,7 +1724,7 @@ const Enemies = {
           if (type === 'swarmer') {
             let clusterSize = 0;
             while (this.roster[this.spawnIndex + clusterSize] === 'swarmer') clusterSize++;
-            const baseY = rand(Background.horizonY * 0.15, Background.horizonY - 80);
+            const baseY = rand(Background.horizonY * 0.15, Background.playBottom - 80);
             const mid = (clusterSize - 1) / 2;
             for (let i = 0; i < clusterSize; i++) {
               this.list.push(new Enemy('swarmer', wave, baseY + (i - mid) * 28));
@@ -1702,7 +1778,7 @@ class TetherHazard {
     // orientation collapses that same rod into a short segment sitting at
     // the pivot's height, opening real gaps above and below to dash through.
     const playTop = Background.horizonY * 0.02;
-    const playBottom = Background.horizonY - this.h - 4;
+    const playBottom = Background.playBottom - this.h - 4;
     this.pivotY = (playTop + playBottom) / 2;
     this.radius = (playBottom - playTop) / 2;
     this.angle = Math.PI / 2;
@@ -1930,7 +2006,7 @@ class MiniBoss {
     this.w = 84; this.h = 58;
     this.x = W + 120;
     this.skyTopY = Background.horizonY * 0.08;
-    this.skyBottomY = Background.horizonY - this.h - 20;
+    this.skyBottomY = Background.playBottom - this.h - 20;
     this.y = rand(this.skyTopY, this.skyBottomY);
     this.targetY = rand(this.skyTopY, this.skyBottomY);
     this.ySpeed = 55;
@@ -2337,7 +2413,7 @@ class RingBoss {
     this.w = 160; this.h = 160;
     this.centerX = W + 140;
     this.skyTop = Background.horizonY * 0.1;
-    this.skyBottom = Background.horizonY - this.h * 0.25;
+    this.skyBottom = Background.playBottom - this.h * 0.25;
     this.midY = (this.skyTop + this.skyBottom) / 2;
     this.ampY = (this.skyBottom - this.skyTop) / 2;
     this.centerY = this.midY;
@@ -2579,7 +2655,7 @@ class SnakeBoss {
     this.barrageFireTimer = 0;
     this.w = 90; this.h = 90;
     this.skyTop = Background.horizonY * 0.1;
-    this.skyBottom = Background.horizonY - this.h * 0.25;
+    this.skyBottom = Background.playBottom - this.h * 0.25;
     this.midY = (this.skyTop + this.skyBottom) / 2;
     this.ampY = (this.skyBottom - this.skyTop) / 2;
     this.segs = [];
@@ -2750,7 +2826,7 @@ class PowerUp {
     this.spec = POWERUP_TYPES[type];
     this.w = 26; this.h = 26;
     this.x = W + rand(20, 80);
-    this.baseY = rand(Background.horizonY * 0.1, Background.horizonY - this.h - 30);
+    this.baseY = rand(Background.horizonY * 0.1, Background.playBottom - this.h - 30);
     this.y = this.baseY;
     this.speed = 130;
     this.t = rand(0, Math.PI * 2);
@@ -2906,6 +2982,7 @@ const Game = {
     Particles.clear();
     Bolts.clear();
     PowerUps.clear();
+    Foreground.clear();
     Hazards.clear();
     Hazards.startWave(this.wave);
     this.boss = null;
@@ -3216,6 +3293,7 @@ const Game = {
   update(dt) {
     if (this.state !== 'playing') return;
     Background.update(dt);
+    Foreground.update(dt);
     this.player.update(dt);
     Bullets.update(dt);
     Enemies.update(dt, this.player, this.wave, !!this.boss);
@@ -3404,6 +3482,7 @@ const Game = {
     Hazards.draw();
     Bolts.draw();
     if (this.player) this.player.draw();
+    Foreground.draw();
     ctx.restore();
 
     if (this.state === 'playing' && this.player.lives <= 1 && this.player.hull <= 1) {
