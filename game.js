@@ -477,6 +477,7 @@ const Input = {
         if (code === 'Digit1') Game.spawnBossOfType('sentinel');
         if (code === 'Digit2') Game.spawnBossOfType('ring');
         if (code === 'Digit3') Game.spawnBossOfType('snake');
+        if (code === 'Digit4') Hazards.spawnDebug();
         if (code === 'Digit0') {
           Game.bossAppearances = { sentinel: 0, ring: 0, snake: 0 };
           Game.showToast('BOSS TIERS RESET', '#ffffff');
@@ -1893,10 +1894,14 @@ const Hazards = {
     if (wave >= HAZARD_UNLOCK_WAVE && !bossActive) {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
-        if (isPreBossWave(wave)) {
+        // Capped to one at a time: two independently-rotating rods on
+        // screen together stack their difficulty multiplicatively (two
+        // separate "which side is safe" puzzles whose safe windows won't
+        // line up), rather than just being twice the obstacle.
+        if (isPreBossWave(wave) || this.list.length > 0) {
           // Hold at the door rather than spawning or drifting further
-          // negative — the moment this wave ends, startWave leaves the
-          // timer alone (still <=0) so the very next eligible wave spawns
+          // negative — the moment the block clears (wave ends, or the
+          // existing hazard finishes crossing), the very next check spawns
           // one right away instead of waiting out a fresh full delay.
           this.spawnTimer = 0;
         } else {
@@ -1911,7 +1916,15 @@ const Hazards = {
     this.list = this.list.filter((h) => !h._dead);
   },
   draw() { this.list.forEach((h) => h.draw()); },
-  clear() { this.list = []; this.spawnTimer = Infinity; }
+  clear() { this.list = []; this.spawnTimer = Infinity; },
+  // Debug-only: force one in immediately, bypassing the wave gate, spawn
+  // timer, and one-at-a-time cap, so it can be previewed without playing to
+  // wave 16.
+  spawnDebug() {
+    this.list.push(new TetherHazard());
+    Game.showToast('GEMINI INCOMING', HAZARD_COLOR);
+    Audio_.bossWarning();
+  }
 };
 
 /* ============================== BOSSES ============================== */
@@ -2978,7 +2991,7 @@ const Game = {
     });
     if (DEBUG) {
       document.getElementById('debugTag').classList.remove('hidden');
-      console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Sovereign/Viper, 0 = reset boss tiers');
+      console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Sovereign/Viper, 4 = spawn Gemini, 0 = reset boss tiers');
     }
     requestAnimationFrame((t) => this.loop(t));
   },
