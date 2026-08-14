@@ -44,7 +44,13 @@ body::before {
   position: relative;
   z-index: 1;
   padding: 28px clamp(20px, 4vw, 44px) 20px;
+  /* Layered, top to bottom: a soft diagonal sheen (like light catching a
+     molded plastic panel), a fine brushed diagonal texture, then the
+     original flat color gradient — makes the body read as a material
+     surface instead of a plain flat-colored card. */
   background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.05) 0%, transparent 20%, transparent 80%, rgba(255, 255, 255, 0.03) 100%),
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 3px),
     linear-gradient(180deg, #1c0f3a 0%, var(--bg-cab) 40%, #0d0620 100%);
   border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.06);
