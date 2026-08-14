@@ -28,7 +28,21 @@ const weaponsEl = document.getElementById('weapons');
 const bossBarWrapEl = document.getElementById('bossBarWrap');
 const bossBarLabelEl = document.getElementById('bossBarLabel');
 const bossBarFillEl = document.getElementById('bossBarFill');
-const difficultyButtons = document.querySelectorAll('.diff-btn');
+const leaderboardBtnEl = document.getElementById('leaderboardBtn');
+const leaderboardOverlayEl = document.getElementById('leaderboardOverlay');
+const leaderboardListEl = document.getElementById('leaderboardList');
+const leaderboardCloseBtnEl = document.getElementById('leaderboardCloseBtn');
+const scoreSubmitEl = document.getElementById('scoreSubmit');
+const playerNameInputEl = document.getElementById('playerNameInput');
+const submitScoreBtnEl = document.getElementById('submitScoreBtn');
+const submitStatusEl = document.getElementById('submitStatus');
+// Scoped to the start-screen container specifically — the leaderboard
+// overlay reuses the same .diff-btn class for its own difficulty tabs
+// (visual consistency only), and those must NOT be swept up here and
+// wired to Game.setDifficulty(), or browsing the leaderboard would change
+// the player's actual selected play difficulty.
+const difficultyButtons = document.querySelectorAll('#difficultySelect .diff-btn');
+const leaderboardDiffButtons = document.querySelectorAll('#leaderboardDiffSelect .diff-btn');
 let toastTimeoutHandle = null;
 
 const HIGH_SCORE_KEYS = {
@@ -2937,6 +2951,134 @@ const PowerUps = {
   clear() { this.list = []; this.spawnTimer = rand(8, 13); }
 };
 
+/* ============================== LEADERBOARD ============================== */
+
+const PLAYER_NAME_KEY = 'neonskies_playername';
+
+// Shared leaderboard, backed by api/submit_score.php + api/get_leaderboard.php.
+// Separate from the local HIGH_SCORE_KEYS personal-best tracking above — this
+// is the cross-player board, gated on the user actually having a PHP/MySQL
+// backend deployed under /api.
+const Leaderboard = {
+  activeDifficulty: 'normal',
+  init() {
+    leaderboardBtnEl.addEventListener('click', () => this.open(Game.difficulty));
+    leaderboardCloseBtnEl.addEventListener('click', () => this.close());
+    leaderboardDiffButtons.forEach((btn) => {
+      btn.addEventListener('click', () => this.selectDifficulty(btn.dataset.difficulty));
+    });
+    submitScoreBtnEl.addEventListener('click', () => this.submit());
+  },
+  open(difficulty, highlightRank) {
+    leaderboardOverlayEl.classList.remove('hidden');
+    this.selectDifficulty(difficulty, highlightRank);
+  },
+  close() {
+    leaderboardOverlayEl.classList.add('hidden');
+  },
+  selectDifficulty(difficulty, highlightRank) {
+    this.activeDifficulty = difficulty;
+    leaderboardDiffButtons.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.difficulty === difficulty);
+    });
+    this.fetchAndRender(difficulty, highlightRank);
+  },
+  fetchAndRender(difficulty, highlightRank) {
+    leaderboardListEl.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'leaderboard-empty';
+    loading.textContent = 'LOADING...';
+    leaderboardListEl.appendChild(loading);
+    fetch(`api/get_leaderboard.php?difficulty=${encodeURIComponent(difficulty)}`)
+      .then((res) => res.json())
+      .then((data) => this.render(data.scores || [], highlightRank))
+      .catch(() => {
+        leaderboardListEl.innerHTML = '';
+        const err = document.createElement('div');
+        err.className = 'leaderboard-empty';
+        err.textContent = 'COULD NOT LOAD LEADERBOARD';
+        leaderboardListEl.appendChild(err);
+      });
+  },
+  // Built via DOM APIs (createElement/textContent) rather than innerHTML
+  // template strings, so a submitted name can never be interpreted as HTML
+  // regardless of what characters end up stored — belt-and-suspenders on
+  // top of the backend's own character-set stripping.
+  render(scores, highlightRank) {
+    leaderboardListEl.innerHTML = '';
+    if (scores.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'leaderboard-empty';
+      empty.textContent = 'NO SCORES YET — BE THE FIRST';
+      leaderboardListEl.appendChild(empty);
+      return;
+    }
+    let highlightEl = null;
+    scores.forEach((row, i) => {
+      const rank = i + 1;
+      const el = document.createElement('div');
+      el.className = 'leaderboard-row' + (rank === highlightRank ? ' you' : '');
+      const rankSpan = document.createElement('span');
+      rankSpan.className = 'rank';
+      rankSpan.textContent = String(rank);
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'lb-name';
+      nameSpan.textContent = row.name;
+      const scoreSpan = document.createElement('span');
+      scoreSpan.className = 'lb-score';
+      scoreSpan.textContent = String(row.score).padStart(6, '0');
+      const waveSpan = document.createElement('span');
+      waveSpan.className = 'lb-wave';
+      waveSpan.textContent = `W${String(row.wave).padStart(2, '0')}`;
+      el.append(rankSpan, nameSpan, scoreSpan, waveSpan);
+      leaderboardListEl.appendChild(el);
+      if (rank === highlightRank) highlightEl = el;
+    });
+    if (highlightEl) {
+      requestAnimationFrame(() => highlightEl.scrollIntoView({ block: 'center' }));
+    }
+  },
+  submit() {
+    const rawName = playerNameInputEl.value.trim();
+    if (!rawName) {
+      submitStatusEl.textContent = 'ENTER A NAME FIRST';
+      return;
+    }
+    localStorage.setItem(PLAYER_NAME_KEY, rawName);
+    submitScoreBtnEl.disabled = true;
+    submitStatusEl.textContent = 'SUBMITTING...';
+    fetch('api/submit_score.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: rawName,
+        score: Game.score,
+        wave: Game.wave,
+        difficulty: Game.difficulty,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          submitStatusEl.textContent = 'SUBMISSION FAILED';
+          submitScoreBtnEl.disabled = false;
+          return;
+        }
+        submitStatusEl.textContent = data.madeTop50 ? `RANK #${data.rank}!` : 'SCORE SAVED';
+        this.open(Game.difficulty, data.madeTop50 ? data.rank : undefined);
+      })
+      .catch(() => {
+        submitStatusEl.textContent = 'COULD NOT REACH SERVER';
+        submitScoreBtnEl.disabled = false;
+      });
+  },
+  resetSubmitUI() {
+    playerNameInputEl.value = localStorage.getItem(PLAYER_NAME_KEY) || '';
+    submitStatusEl.textContent = '';
+    submitScoreBtnEl.disabled = false;
+  }
+};
+
 /* ============================== GAME ============================== */
 
 const Game = {
@@ -2989,6 +3131,7 @@ const Game = {
     difficultyButtons.forEach((btn) => {
       btn.addEventListener('click', () => this.setDifficulty(btn.dataset.difficulty));
     });
+    Leaderboard.init();
     if (DEBUG) {
       document.getElementById('debugTag').classList.remove('hidden');
       console.log('[DEBUG] 1/2/3 = spawn next-tier Sentinel/Sovereign/Viper, 4 = spawn Gemini, 0 = reset boss tiers');
@@ -3009,6 +3152,7 @@ const Game = {
     this.state = 'start';
     gameOverOverlay.classList.add('hidden');
     startOverlay.classList.remove('hidden');
+    Leaderboard.close();
   },
 
   start() {
@@ -3036,6 +3180,7 @@ const Game = {
     startOverlay.classList.add('hidden');
     gameOverOverlay.classList.add('hidden');
     pauseOverlay.classList.add('hidden');
+    Leaderboard.close();
     this.updateHud();
     this.updateBossBar();
     Music.start();
@@ -3327,6 +3472,7 @@ const Game = {
     localStorage.setItem(key, String(high));
     finalScoreEl.textContent = `FINAL SCORE ${String(this.score).padStart(6, '0')}`;
     highScoreEl.textContent = `BEST (${DIFFICULTY_PRESETS[this.difficulty].label}) ${String(high).padStart(6, '0')}`;
+    Leaderboard.resetSubmitUI();
     gameOverOverlay.classList.remove('hidden');
   },
 
