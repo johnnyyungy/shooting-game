@@ -75,10 +75,37 @@ body::before {
   100% { background-position: 300% 50%; }
 }
 
+/* Bulb strips flanking the title, chasing left to right like the light
+   strip on a real arcade cabinet header. A single repeating-gradient layer
+   with its background-position animated in whole-dot steps, rather than
+   extra DOM elements per bulb. Sits beside the title (not above it) so it
+   doesn't add extra height to the cabinet. */
+.marquee-lights {
+  flex: 1 1 auto;
+  max-width: 140px;
+  height: 6px;
+  background-image: repeating-radial-gradient(circle at 8px 3px, var(--cyan) 0 2px, transparent 2.4px 16px);
+  background-size: 16px 6px;
+  filter: drop-shadow(0 0 2px var(--cyan)) drop-shadow(0 0 5px var(--cyan));
+  opacity: 0.85;
+  animation: chaseLights 1.1s steps(5) infinite;
+}
+
+@keyframes chaseLights {
+  to { background-position: -80px 0; }
+}
+
 .marquee {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 3vw, 28px);
   margin-bottom: 18px;
   line-height: 1;
+}
+
+.marquee-titles {
+  text-align: center;
 }
 
 .marquee-text {
@@ -105,11 +132,28 @@ body::before {
 }
 
 .screen-frame {
+  position: relative;
   padding: 14px;
   border-radius: 14px;
   background: linear-gradient(155deg, #3a2a5c, #17102c 60%);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05), inset 0 2px 18px rgba(0,0,0,0.6);
 }
+
+/* Small rivet/screw-head icons at the bezel's four corners — a cheap
+   hardware detail that reads as "physical cabinet" rather than a div. */
+.bolt {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #d8dce6 0%, #9095a6 35%, #3f4350 75%, #1a1c22 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 1px rgba(255, 255, 255, 0.5);
+  z-index: 2;
+}
+.bolt-tl { top: 6px; left: 6px; }
+.bolt-tr { top: 6px; right: 6px; }
+.bolt-bl { bottom: 6px; left: 6px; }
+.bolt-br { bottom: 6px; right: 6px; }
 
 .screen {
   position: relative;
